@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.pyc
+
+# Virtual environments
+venv/
+
+# Data/log outputs
+*.csv
+h10_hr_log.csv
+
+# macOS
+.DS_Store
+.CFUserTextEncoding

@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "mappings": [
+    {
+      "input": "bpm",
+      "min": 50,
+      "max": 180,
+      "mode": "cc",
+      "cc": 74,
+      "channel": 1,
+      "smoothing": {"type": "ema", "alpha": 0.2}
+    },
+    {
+      "input": "rr_ms",
+      "min": 400,
+      "max": 1200,
+      "mode": "cc",
+      "cc": 71,
+      "channel": 1,
+      "smoothing": {"type": "ema", "alpha": 0.3}
+    },
+    {
+      "input": "contact",
+      "min": 0,
+      "max": 1,
+      "mode": "cc",
+      "cc": 91,
+      "channel": 1,
+      "smoothing": {"type": "ema", "alpha": 0.1}
+    },
+    {
+      "input": "motion",
+      "min": 0,
+      "max": 1,
+      "mode": "cc",
+      "cc": 1,
+      "channel": 1,
+      "smoothing": {"type": "attack_release", "attack": 0.25, "release": 0.1}
+    },
+    {
+      "input": "bpm",
+      "min": 90,
+      "max": 140,
+      "mode": "note",
+      "note": 36,
+      "channel": 1,
+      "trigger_threshold": 0.7,
+      "hysteresis": 0.1,
+      "smoothing": {"type": "ema", "alpha": 0.15}
+    }
+  ]
+}
