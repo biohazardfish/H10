@@ -1,0 +1,134 @@
+name: Quest Assistant (RPG)
+
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  quest_to_docs:
+    if: github.event.label.name == 'quest'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare quest note
+        env:
+          ISSUE_NUMBER: ${{ github
+cd /Users/taichengwong/Projects/H10
+
+cat > .github/workflows/quest-assistant.yml <<'YAML'
+name: Quest Assistant (RPG)
+
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  quest_to_docs:
+    if: github.event.label.name == 'quest'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare quest note
+        env:
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_URL: ${{ github.event.issue.html_url }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          ISSUE_AUTHOR: ${{ github.event.issue.user.login }}
+          LABELS_JSON: ${{ toJson(github.event.issue.labels.*.name) }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p docs/quests
+          TODAY="$(date -u +%F)"
+          OUT="docs/quests/${TODAY}-issue-${ISSUE_NUMBER}.md"
+
+          cat > "$OUT" << 'EOF'
+          ---
+          type: quest
+          issue_number: __ISSUE_NUMBER__
+          title: "__ISSUE_TITLE__"
+          url: "__ISSUE_URL__"
+          author: "__ISSUE_AUTHOR__"
+          created_utc: "__TODAY__"
+          status: open
+          labels:
+          __LABELS__
+          ---
+
+          # __ISSUE_TITLE__
+
+          - Source: __ISSUE_URL__
+          - Author: __ISSUE_AUTHOR__
+          - Created (UTC): __TODAY__
+
+          ## Quest brief
+
+          __ISSUE_BODY__
+          EOF
+
+          export TODAY OUT
+
+          python3 - << 'PY'
+          import os, json, pathlib
+
+          out = pathlib.Path(os.environ["OUT"])
+          text = out.read_text(encoding="utf-8")
+
+          def esc(s: str) -> str:
+              return (s or "").replace("\\", "\\\\").replace('"', '\\"')
+
+          try:
+              labels = json.loads(os.environ.get("LABELS_JSON", "[]"))
+              if not isinstance(labels, list):
+                  labels = []
+          except Exception:
+              labels = []
+
+          label_lines = "\n".join([f"  - {l}" for l in labels]) if labels else "  - quest"
+
+          repl = {
+              "__ISSUE_NUMBER__": os.environ.get("ISSUE_NUMBER", ""),
+              "__ISSUE_TITLE__": esc(os.environ.get("ISSUE_TITLE", "")),
+              "__ISSUE_URL__": os.environ.get("ISSUE_URL", ""),
+              "__ISSUE_AUTHOR__": os.environ.get("ISSUE_AUTHOR", ""),
+              "__TODAY__": os.environ.get("TODAY", ""),
+              "__ISSUE_BODY__": os.environ.get("ISSUE_BODY") or "_(empty)_",
+              "__LABELS__": label_lines,
+          }
+
+          for k, v in repl.items():
+              text = text.replace(k, v)
+
+          out.write_text(text, encoding="utf-8")
+          PY
+
+      - name: Commit quest note
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add docs/quests/*.md
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          git commit -m "quest: log issue #${{ github.event.issue.number }}"
+          git push
