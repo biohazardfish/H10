@@ -1,25 +1,20 @@
-# Quest Assistant (RPG)
+# Quest Assistant
 
-當 GitHub issue 被加上 `quest` label 時，GitHub Actions 會自動：
+## What it does
+When the `quest` label is added to an Issue or PR, a GitHub Action generates an Obsidian-ready template and commits it to the repo.
 
-1. 在 `docs/quests/` 生成一個 quest 記錄檔（Markdown）
-2. 自動 commit 並 push 回 repo
+## Trigger rules
+- Runs on `issues` and `pull_request` labeled events.
+- The label must be exactly `quest`.
 
-## 觸發方式
+## Output path
+- `.quest-resources/Q{number}.md`
 
-- 開一個 issue
-- 加上 label：`quest`
+## Non-overwrite rule
+- If the file already exists, the workflow skips creation.
 
-## 生成檔案格式
-
-路徑：`docs/quests/YYYY-MM-DD-issue-<number>.md`
-
-包含：
-- issue 標題 / URL / 作者 / 建檔日期（UTC）
-- labels 清單
-- issue body 作為「Quest brief」
-
-## 注意
-
-- workflow 只在 `issues: labeled` 事件下運作
-- 有 `permissions: contents: write`，用內建 `GITHUB_TOKEN` 就能 push
+## How to test
+1. Create a new Issue in H10.
+2. Add the label `quest`.
+3. Check the Actions tab for “Quest Assistant (generate Obsidian template)”.
+4. Confirm the new file appears in the repo at `.quest-resources/Q{issue_number}.md`.

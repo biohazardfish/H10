@@ -1,66 +1,79 @@
-name: Quest Assistant (RPG)
+name: Quest Assistant (generate Obsidian template)
 
 on:
   issues:
+    types: [labeled]
+  pull_request:
     types: [labeled]
 
 permissions:
   contents: write
 
 jobs:
-  quest_to_docs:
+  generate:
     if: github.event.label.name == 'quest'
     runs-on: ubuntu-latest
-
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
-      - name: Write quest note
-        env:
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
-          ISSUE_TITLE: ${{ github.event.issue.title }}
-          ISSUE_URL: ${{ github.event.issue.html_url }}
-          ISSUE_BODY: ${{ github.event.issue.body }}
-          ISSUE_AUTHOR: ${{ github.event.issue.user.login }}
+      - name: Generate quest template
+        shell: bash
         run: |
           set -euo pipefail
-          mkdir -p docs/quests
-          TODAY="$(date -u +%F)"
-          OUT="docs/quests/${TODAY}-issue-${ISSUE_NUMBER}.md"
 
-          cat > "$OUT" <<EOF
-          ---
-          type: quest
-          issue_number: ${ISSUE_NUMBER}
-          title: "${ISSUE_TITLE}"
-          url: "${ISSUE_URL}"
-          author: "${ISSUE_AUTHOR}"
-          created_utc: "${TODAY}"
-          status: open
-          labels:
-            - quest
-          ---
+          mkdir -p .quest-resources
 
-          # ${ISSUE_TITLE}
+          if [[ "${{ github.event_name }}" == "issues" ]]; then
+            NUM="${{ github.event.issue.number }}"
+            TITLE="${{ github.event.issue.title }}"
+            URL="${{ github.event.issue.html_url }}"
+            TYPE="Issue"
+          else
+            NUM="${{ github.event.pull_request.number }}"
+            TITLE="${{ github.event.pull_request.title }}"
+            URL="${{ github.event.pull_request.html_url }}"
+            TYPE="PR"
+          fi
 
-          - Source: ${ISSUE_URL}
-          - Author: ${ISSUE_AUTHOR}
-          - Created (UTC): ${TODAY}
-
-          ## Quest brief
-
-          ${ISSUE_BODY:-_(empty)_}
-          EOF
-
-      - name: Commit and push
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add docs/quests/*.md
-          if git diff --cached --quiet; then
-            echo "No changes to commit."
+          FILE=".quest-resources/Q${NUM}.md"
+          if [[ -f "$FILE" ]]; then
+            echo "Template already exists: $FILE (skip)"
             exit 0
           fi
-          git commit -m "quest: log issue #${{ github.event.issue.number }}"
+
+          NOW="$(date -u +%FT%TZ)"
+
+          cat > "$FILE" << EOF
+          # Quest Q${NUM}: ${TITLE}
+
+          ## 🎯 Quest Info
+          - **Type:** ${TYPE}
+          - **GitHub:** ${URL}
+          - **Created (UTC):** ${NOW}
+          - **Status:** 🟡 Planning
+
+          ## 📜 Runlog & Decisions
+          - (Paste Codex outputs / decisions here)
+
+          ## 🧰 Artifacts
+          - (Links to commits, files, notes)
+
+          ## 🧭 Next Steps
+          - [ ] Define acceptance criteria
+          - [ ] Do the smallest test
+          - [ ] Commit + document
+          EOF
+
+          echo "Created $FILE"
+
+      - name: Commit quest resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "Quest Assistant"
+          git config user.email "assistant@users.noreply.github.com"
+
+          git add .quest-resources/
+          git commit -m "Add quest template for Q${{ github.event.issue.number || github.event.pull_request.number }}" || exit 0
           git push
