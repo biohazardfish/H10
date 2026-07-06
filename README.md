@@ -77,5 +77,3 @@ timestamp,bpm
 
 ## MIDI bridge scaffold
 See `midi_bridge/README_MIDI.md` for a JSONL-to-MIDI mapping scaffold and a dry-run demo.
-
-![Repo visualization](./diagram.svg)
