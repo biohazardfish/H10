@@ -528,8 +528,13 @@ def process_event(event: Dict[str, Any], config: Dict[str, Any],
             vel_from_input = mapping.get("velocity_from_input")
             if vel_from_input:
                 velocity = to_velocity(smooth)
+            # 音符按住到下一拍才放開：note_on 後立刻 note_off 的零長度音符
+            # 會整對落在同一個音訊區塊內，被合成器在發聲前取消
+            prev = state.get("pulse_note_on")
+            if prev is not None:
+                sink.send_note_off(channel, prev, 0, meta)
             sink.send_note_on(channel, note, velocity, meta)
-            sink.send_note_off(channel, note, 0, meta)
+            state["pulse_note_on"] = note
             continue
 
         # Phase 3: pitch bend
