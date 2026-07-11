@@ -5,18 +5,13 @@ Project overview: simple Python utilities for Polar H10 BLE heart rate measureme
 - `h10_hr_live.py`: connect to H10 and print live heart rate (BPM).
 - `h10_hr_log.py`: connect to H10, print BPM, and append to CSV.
 
-No .py modifications performed by this audit/update.
-
 ## Folder layout
 ```
 H10/
   scan_h10.py
   h10_hr_live.py
   h10_hr_log.py
-  h10_hr_log.csv
-  venv/
   midi_bridge/
-  AUDIT_USELESS_FILES.md
   README.md
   .gitignore
 ```
@@ -77,5 +72,3 @@ timestamp,bpm
 
 ## MIDI bridge scaffold
 See `midi_bridge/README_MIDI.md` for a JSONL-to-MIDI mapping scaffold and a dry-run demo.
-
-![Repo visualization](./diagram.svg)
