@@ -1,4 +1,7 @@
 import asyncio
+import datetime
+import json
+import sys
 from bleak import BleakClient
 
 # 把這裡換成你剛剛掃描到的 Polar H10 地址（括號裡那串）
@@ -8,47 +11,80 @@ H10_ADDRESS = "BCBA9017-479D-B12A-933D-204CBCA3DF70"
 HEART_RATE_CHAR_UUID = "00002a37-0000-1000-8000-00805f9b34fb"
 
 
-def parse_heart_rate(data: bytes) -> int:
-    """依照 Bluetooth Heart Rate Profile 解析 BPM"""
+def parse_heart_rate(data: bytes) -> dict:
+    """依照 Bluetooth Heart Rate Profile 解析 BPM 和 RR intervals。
+
+    回傳 {"bpm": int, "rr_intervals": [int, ...]}
+    rr_intervals 以毫秒為單位，每一個值代表兩次心跳之間的間隔。
+    """
+    result = {"bpm": 0, "rr_intervals": []}
     if not data:
-        return 0
+        return result
 
     flags = data[0]
-    hr_16bit = flags & 0x01  # 第 0 bit：0 = uint8, 1 = uint16
+    hr_16bit = flags & 0x01        # bit 0: HR value format
+    rr_present = (flags >> 4) & 0x01  # bit 4: RR-Interval present
 
+    offset = 1
     if hr_16bit == 0 and len(data) >= 2:
-        # uint8 心率
-        return data[1]
+        result["bpm"] = data[1]
+        offset = 2
     elif hr_16bit == 1 and len(data) >= 3:
-        # uint16 心率（小端）
-        return int.from_bytes(data[1:3], byteorder="little")
-    else:
-        return 0
+        result["bpm"] = int.from_bytes(data[1:3], byteorder="little")
+        offset = 3
+
+    # Energy Expended（bit 3）佔 2 bytes，跳過
+    if (flags >> 3) & 0x01:
+        offset += 2
+
+    # 解析 RR intervals（每個 uint16，單位 1/1024 秒）
+    if rr_present:
+        while offset + 1 < len(data):
+            rr_raw = int.from_bytes(data[offset:offset + 2], byteorder="little")
+            rr_ms = int(round(rr_raw * 1000 / 1024))  # 轉毫秒
+            result["rr_intervals"].append(rr_ms)
+            offset += 2
+
+    return result
 
 
 def handle_hr_notification(sender: int, data: bytearray):
-    bpm = parse_heart_rate(data)
-    print(f"HR: {bpm} bpm   (raw: {data.hex()})")
+    """每收到 BLE 通知，為每一次心跳輸出一行 JSONL。"""
+    parsed = parse_heart_rate(data)
+    bpm = parsed["bpm"]
+    ts = datetime.datetime.now().isoformat(timespec="milliseconds")
+
+    if parsed["rr_intervals"]:
+        # 每一個 RR interval = 一次心跳 → 輸出一行
+        for rr_ms in parsed["rr_intervals"]:
+            event = {"timestamp": ts, "bpm": bpm, "rr_ms": rr_ms, "beat": 1}
+            print(json.dumps(event), flush=True)
+    else:
+        # H10 沒回傳 RR（少見），仍輸出 BPM
+        event = {"timestamp": ts, "bpm": bpm, "rr_ms": 0, "beat": 1}
+        print(json.dumps(event), flush=True)
+
+    # 同時在 stderr 顯示簡要資訊，方便除錯
+    rr_str = ",".join(str(r) for r in parsed["rr_intervals"]) if parsed["rr_intervals"] else "N/A"
+    print(f"HR: {bpm} bpm  RR: [{rr_str}] ms  (raw: {data.hex()})", file=sys.stderr)
 
 
 async def main():
-    print(f"Connecting to Polar H10 at {H10_ADDRESS} ...")
+    print(f"Connecting to Polar H10 at {H10_ADDRESS} ...", file=sys.stderr)
     async with BleakClient(H10_ADDRESS) as client:
         if not client.is_connected:
-            print("連線失敗")
+            print("連線失敗", file=sys.stderr)
             return
 
-        print("Connected! 開始訂閱心率資料（按 Ctrl+C 停止）")
+        print("Connected! 每一次心跳輸出一行 JSONL（按 Ctrl+C 停止）", file=sys.stderr)
 
-        # 開始訂閱 Heart Rate Measurement 通知
         await client.start_notify(HEART_RATE_CHAR_UUID, handle_hr_notification)
 
         try:
-            # 一直等，讓通知持續跑；每秒睡一下
             while True:
                 await asyncio.sleep(1.0)
         except KeyboardInterrupt:
-            print("\n停止訂閱，斷線中...")
+            print("\n停止訂閱，斷線中...", file=sys.stderr)
         finally:
             await client.stop_notify(HEART_RATE_CHAR_UUID)
 

@@ -1,18 +1,158 @@
 #!/usr/bin/env python3
+"""H10 JSONL → MIDI bridge with response curves, dead zones,
+derived inputs (HRV), zone conditions, pitch bend & program change."""
+
 import argparse
+import collections
 import json
+import math
 import sys
-from typing import Any, Dict, Optional
+from typing import Any, Deque, Dict, List, Optional
 
 
 def eprint(msg: str) -> None:
     print(msg, file=sys.stderr)
 
 
+# ---------------------------------------------------------------------------
+# Config loading & validation
+# ---------------------------------------------------------------------------
+
+VALID_MODES = {"cc", "note", "pulse", "pitchbend", "program_change"}
+VALID_CURVES = {"linear", "log", "exp", "scurve"}
+VALID_SMOOTHING_TYPES = {"ema", "attack_release", "moving_average", "median", "rate_limit"}
+VALID_CONDITION_OPS = {"<", "<=", ">", ">=", "==", "!="}
+
+# Built-in inputs that come directly from H10 events
+BUILTIN_INPUTS = {"bpm", "rr_ms", "beat"}
+# Derived inputs computed from raw events
+DERIVED_INPUTS = {"hrv_rmssd", "hrv_sdnn", "rr_delta", "bpm_accel"}
+ALL_KNOWN_INPUTS = BUILTIN_INPUTS | DERIVED_INPUTS
+
+
+def validate_mapping(idx: int, m: Dict[str, Any]) -> List[str]:
+    """Return a list of error strings for mapping at *idx*."""
+    errors: List[str] = []
+
+    # -- input (required) --
+    inp = m.get("input")
+    if inp is None:
+        errors.append(f"mapping[{idx}]: missing required field 'input'")
+
+    # -- mode --
+    mode = m.get("mode", "cc")
+    if mode not in VALID_MODES:
+        errors.append(f"mapping[{idx}]: unknown mode '{mode}' (valid: {', '.join(sorted(VALID_MODES))})")
+
+    # -- min / max --
+    for key in ("min", "max"):
+        v = m.get(key)
+        if v is not None:
+            try:
+                float(v)
+            except (TypeError, ValueError):
+                errors.append(f"mapping[{idx}]: '{key}' must be a number, got {v!r}")
+
+    # -- curve --
+    curve = m.get("curve", "linear")
+    if curve not in VALID_CURVES:
+        errors.append(f"mapping[{idx}]: unknown curve '{curve}' (valid: {', '.join(sorted(VALID_CURVES))})")
+
+    # -- channel 1-16 --
+    ch = m.get("channel", 1)
+    try:
+        ch = int(ch)
+        if ch < 1 or ch > 16:
+            errors.append(f"mapping[{idx}]: channel must be 1-16, got {ch}")
+    except (TypeError, ValueError):
+        errors.append(f"mapping[{idx}]: channel must be an integer, got {ch!r}")
+
+    # -- mode-specific --
+    if mode == "cc":
+        cc = m.get("cc", 1)
+        try:
+            cc = int(cc)
+            if cc < 0 or cc > 127:
+                errors.append(f"mapping[{idx}]: cc must be 0-127, got {cc}")
+        except (TypeError, ValueError):
+            errors.append(f"mapping[{idx}]: cc must be an integer, got {cc!r}")
+
+    if mode in ("note", "pulse"):
+        note = m.get("note", 36)
+        try:
+            note = int(note)
+            if note < 0 or note > 127:
+                errors.append(f"mapping[{idx}]: note must be 0-127, got {note}")
+        except (TypeError, ValueError):
+            errors.append(f"mapping[{idx}]: note must be an integer, got {note!r}")
+
+    if mode == "program_change":
+        prog = m.get("program")
+        if prog is None:
+            errors.append(f"mapping[{idx}]: mode 'program_change' requires 'program' field")
+        else:
+            try:
+                prog = int(prog)
+                if prog < 0 or prog > 127:
+                    errors.append(f"mapping[{idx}]: program must be 0-127, got {prog}")
+            except (TypeError, ValueError):
+                errors.append(f"mapping[{idx}]: program must be an integer, got {prog!r}")
+
+    # -- smoothing --
+    sm = m.get("smoothing")
+    if sm is not None:
+        st = sm.get("type", "ema")
+        if st not in VALID_SMOOTHING_TYPES:
+            errors.append(f"mapping[{idx}].smoothing: unknown type '{st}' (valid: {', '.join(sorted(VALID_SMOOTHING_TYPES))})")
+
+    # -- condition --
+    cond = m.get("condition")
+    if cond is not None:
+        if not isinstance(cond, dict):
+            errors.append(f"mapping[{idx}]: 'condition' must be an object")
+        else:
+            if "field" not in cond:
+                errors.append(f"mapping[{idx}].condition: missing 'field'")
+            op = cond.get("op")
+            if op not in VALID_CONDITION_OPS:
+                errors.append(f"mapping[{idx}].condition: unknown op '{op}' (valid: {', '.join(sorted(VALID_CONDITION_OPS))})")
+            if "value" not in cond:
+                errors.append(f"mapping[{idx}].condition: missing 'value'")
+
+    # -- zone --
+    zone = m.get("zone")
+    if zone is not None:
+        if not isinstance(zone, list) or len(zone) != 2:
+            errors.append(f"mapping[{idx}]: 'zone' must be a [lo, hi] array")
+
+    return errors
+
+
+def validate_config(config: Dict[str, Any]) -> None:
+    """Validate the full config; exit with clear messages on error."""
+    mappings = config.get("mappings")
+    if mappings is None:
+        eprint("Config error: missing 'mappings' array")
+        sys.exit(2)
+    if not isinstance(mappings, list):
+        eprint("Config error: 'mappings' must be an array")
+        sys.exit(2)
+
+    all_errors: List[str] = []
+    for idx, m in enumerate(mappings):
+        all_errors.extend(validate_mapping(idx, m))
+
+    if all_errors:
+        eprint("Config validation failed:")
+        for e in all_errors:
+            eprint(f"  - {e}")
+        sys.exit(2)
+
+
 def load_config(path: str) -> Dict[str, Any]:
     try:
         with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
+            config = json.load(f)
     except FileNotFoundError:
         eprint(f"Config not found: {path}")
         sys.exit(2)
@@ -20,6 +160,13 @@ def load_config(path: str) -> Dict[str, Any]:
         eprint(f"Invalid JSON in config: {path}: {exc}")
         sys.exit(2)
 
+    validate_config(config)
+    return config
+
+
+# ---------------------------------------------------------------------------
+# Math helpers
+# ---------------------------------------------------------------------------
 
 def clamp(value: float, lo: float, hi: float) -> float:
     if value < lo:
@@ -35,10 +182,36 @@ def normalize(value: float, vmin: float, vmax: float) -> float:
     return clamp((value - vmin) / (vmax - vmin), 0.0, 1.0)
 
 
+# ---------------------------------------------------------------------------
+# Phase 1: Response curves
+# ---------------------------------------------------------------------------
+
+def apply_curve(norm: float, curve: str) -> float:
+    """Apply a response curve to a 0-1 normalized value."""
+    if curve == "linear":
+        return norm
+    if curve == "log":
+        # Attempt logarithmic response: more sensitive at low values
+        return math.log1p(norm * 9) / math.log(10)  # log10(1 + norm*9)
+    if curve == "exp":
+        # Exponential response: more sensitive at high values
+        return (math.pow(10, norm) - 1) / 9.0
+    if curve == "scurve":
+        # Sigmoid S-curve: gentle at both ends, steep in the middle
+        # Uses a simple smoothstep: 3x² - 2x³
+        return norm * norm * (3.0 - 2.0 * norm)
+    return norm
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 + 2: Smoothing (EMA, attack/release, moving_average, median, rate_limit)
+# ---------------------------------------------------------------------------
+
 def apply_smoothing(value: float, smoothing: Optional[Dict[str, Any]], state: Dict[str, Any]) -> float:
     if not smoothing:
         return value
     stype = smoothing.get("type", "ema")
+
     if stype == "ema":
         alpha = float(smoothing.get("alpha", 0.2))
         prev = state.get("ema")
@@ -48,6 +221,7 @@ def apply_smoothing(value: float, smoothing: Optional[Dict[str, Any]], state: Di
         out = prev + alpha * (value - prev)
         state["ema"] = out
         return out
+
     if stype == "attack_release":
         attack = float(smoothing.get("attack", 0.2))
         release = float(smoothing.get("release", 0.2))
@@ -61,7 +235,88 @@ def apply_smoothing(value: float, smoothing: Optional[Dict[str, Any]], state: Di
             out = prev + release * (value - prev)
         state["ar"] = out
         return out
+
+    if stype == "moving_average":
+        window = int(smoothing.get("window", 5))
+        buf: Deque[float] = state.setdefault("ma_buf", collections.deque(maxlen=window))
+        buf.append(value)
+        return sum(buf) / len(buf)
+
+    if stype == "median":
+        window = int(smoothing.get("window", 5))
+        buf = state.setdefault("med_buf", collections.deque(maxlen=window))
+        buf.append(value)
+        sorted_buf = sorted(buf)
+        n = len(sorted_buf)
+        if n % 2 == 1:
+            return sorted_buf[n // 2]
+        return (sorted_buf[n // 2 - 1] + sorted_buf[n // 2]) / 2.0
+
+    if stype == "rate_limit":
+        max_delta = float(smoothing.get("max_delta", 0.05))
+        prev = state.get("rl")
+        if prev is None:
+            state["rl"] = value
+            return value
+        delta = value - prev
+        if abs(delta) > max_delta:
+            delta = max_delta if delta > 0 else -max_delta
+        out = prev + delta
+        state["rl"] = out
+        return out
+
     return value
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: Derived inputs (HRV)
+# ---------------------------------------------------------------------------
+
+class DerivedInputs:
+    """Compute derived values from raw H10 events."""
+
+    def __init__(self, rr_window: int = 20) -> None:
+        self.rr_window = rr_window
+        self.rr_history: Deque[float] = collections.deque(maxlen=rr_window)
+        self.prev_rr: Optional[float] = None
+        self.prev_bpm: Optional[float] = None
+
+    def update(self, event: Dict[str, Any]) -> Dict[str, Any]:
+        """Return an augmented copy of *event* with derived fields."""
+        augmented = dict(event)
+
+        rr = event.get("rr_ms")
+        if rr is not None:
+            rr = float(rr)
+            self.rr_history.append(rr)
+
+            # rr_delta: change between consecutive RR intervals
+            if self.prev_rr is not None:
+                augmented["rr_delta"] = abs(rr - self.prev_rr)
+            self.prev_rr = rr
+
+            # HRV metrics (need at least 2 samples)
+            if len(self.rr_history) >= 2:
+                rr_list = list(self.rr_history)
+                n = len(rr_list)
+
+                # SDNN: standard deviation of RR intervals
+                mean_rr = sum(rr_list) / n
+                variance = sum((x - mean_rr) ** 2 for x in rr_list) / n
+                augmented["hrv_sdnn"] = math.sqrt(variance)
+
+                # RMSSD: root mean square of successive differences
+                diffs_sq = [(rr_list[i] - rr_list[i - 1]) ** 2 for i in range(1, n)]
+                augmented["hrv_rmssd"] = math.sqrt(sum(diffs_sq) / len(diffs_sq))
+
+        bpm = event.get("bpm")
+        if bpm is not None:
+            bpm = float(bpm)
+            if self.prev_bpm is not None:
+                augmented["bpm_accel"] = abs(bpm - self.prev_bpm)
+            self.prev_bpm = bpm
+
+        return augmented
 
 
 class MidiSink:
@@ -90,30 +345,50 @@ class MidiSink:
             eprint(f"Failed to open MIDI output: {exc}")
             self.port = None
 
+    def _emit_json(self, payload: Dict[str, Any]) -> None:
+        print(json.dumps(payload, ensure_ascii=True))
+
     def send_cc(self, channel: int, cc: int, value: int, meta: Dict[str, Any]) -> None:
         if self.dry_run or self.mido is None or self.port is None:
-            out = {"type": "cc", "channel": channel, "cc": cc, "value": value, **meta}
-            print(json.dumps(out, ensure_ascii=True))
+            self._emit_json({"type": "cc", "channel": channel, "cc": cc, "value": value, **meta})
             return
         msg = self.mido.Message("control_change", channel=channel - 1, control=cc, value=value)
         self.port.send(msg)
 
     def send_note_on(self, channel: int, note: int, velocity: int, meta: Dict[str, Any]) -> None:
         if self.dry_run or self.mido is None or self.port is None:
-            out = {"type": "note_on", "channel": channel, "note": note, "velocity": velocity, **meta}
-            print(json.dumps(out, ensure_ascii=True))
+            self._emit_json({"type": "note_on", "channel": channel, "note": note, "velocity": velocity, **meta})
             return
         msg = self.mido.Message("note_on", channel=channel - 1, note=note, velocity=velocity)
         self.port.send(msg)
 
     def send_note_off(self, channel: int, note: int, velocity: int, meta: Dict[str, Any]) -> None:
         if self.dry_run or self.mido is None or self.port is None:
-            out = {"type": "note_off", "channel": channel, "note": note, "velocity": velocity, **meta}
-            print(json.dumps(out, ensure_ascii=True))
+            self._emit_json({"type": "note_off", "channel": channel, "note": note, "velocity": velocity, **meta})
             return
         msg = self.mido.Message("note_off", channel=channel - 1, note=note, velocity=velocity)
         self.port.send(msg)
 
+    # Phase 3: pitch bend
+    def send_pitchbend(self, channel: int, value: int, meta: Dict[str, Any]) -> None:
+        if self.dry_run or self.mido is None or self.port is None:
+            self._emit_json({"type": "pitchbend", "channel": channel, "value": value, **meta})
+            return
+        msg = self.mido.Message("pitchwheel", channel=channel - 1, pitch=value)
+        self.port.send(msg)
+
+    # Phase 3: program change
+    def send_program_change(self, channel: int, program: int, meta: Dict[str, Any]) -> None:
+        if self.dry_run or self.mido is None or self.port is None:
+            self._emit_json({"type": "program_change", "channel": channel, "program": program, **meta})
+            return
+        msg = self.mido.Message("program_change", channel=channel - 1, program=program)
+        self.port.send(msg)
+
+
+# ---------------------------------------------------------------------------
+# Converters
+# ---------------------------------------------------------------------------
 
 def to_cc_value(norm: float) -> int:
     return int(round(clamp(norm, 0.0, 1.0) * 127))
@@ -124,7 +399,52 @@ def to_velocity(norm: float) -> int:
     return max(1, value)
 
 
-def process_event(event: Dict[str, Any], config: Dict[str, Any], states: Dict[int, Dict[str, Any]], sink: MidiSink) -> None:
+def to_pitchbend(norm: float) -> int:
+    """Convert 0-1 normalised value to MIDI pitch bend (-8192 .. 8191)."""
+    return int(round(clamp(norm, 0.0, 1.0) * 16383 - 8192))
+
+
+# ---------------------------------------------------------------------------
+# Condition & zone evaluation (Phase 3)
+# ---------------------------------------------------------------------------
+
+def eval_condition(cond: Dict[str, Any], event: Dict[str, Any]) -> bool:
+    """Evaluate a single condition against the raw event."""
+    field = cond.get("field", "")
+    if field not in event:
+        return False
+    try:
+        actual = float(event[field])
+    except (TypeError, ValueError):
+        return False
+    op = cond.get("op", ">=")
+    target = float(cond.get("value", 0))
+    if op == "<":
+        return actual < target
+    if op == "<=":
+        return actual <= target
+    if op == ">":
+        return actual > target
+    if op == ">=":
+        return actual >= target
+    if op == "==":
+        return actual == target
+    if op == "!=":
+        return actual != target
+    return True
+
+
+def eval_zone(zone: List[float], raw: float) -> bool:
+    """Return True if *raw* falls within [zone_lo, zone_hi]."""
+    return zone[0] <= raw <= zone[1]
+
+
+# ---------------------------------------------------------------------------
+# Core event processing
+# ---------------------------------------------------------------------------
+
+def process_event(event: Dict[str, Any], config: Dict[str, Any],
+                  states: Dict[int, Dict[str, Any]], sink: MidiSink) -> None:
     mappings = config.get("mappings", [])
     for idx, mapping in enumerate(mappings):
         inp = mapping.get("input")
@@ -137,9 +457,23 @@ def process_event(event: Dict[str, Any], config: Dict[str, Any], states: Dict[in
             eprint(f"Non-numeric input for '{inp}': {event.get(inp)}")
             continue
 
+        # Phase 3: condition check — skip mapping if condition not met
+        cond = mapping.get("condition")
+        if cond is not None and not eval_condition(cond, event):
+            continue
+
+        # Phase 3: zone check — skip if raw value outside zone
+        zone = mapping.get("zone")
+        if zone is not None and not eval_zone(zone, raw):
+            continue
+
         vmin = float(mapping.get("min", 0.0))
         vmax = float(mapping.get("max", 1.0))
         norm = normalize(raw, vmin, vmax)
+
+        # Phase 1: apply response curve BEFORE smoothing
+        curve = mapping.get("curve", "linear")
+        norm = apply_curve(norm, curve)
 
         state = states.setdefault(idx, {})
         smooth = apply_smoothing(norm, mapping.get("smoothing"), state)
@@ -156,7 +490,17 @@ def process_event(event: Dict[str, Any], config: Dict[str, Any], states: Dict[in
 
         if mode == "cc":
             cc = int(mapping.get("cc", 1))
-            sink.send_cc(channel, cc, to_cc_value(smooth), meta)
+            cc_val = to_cc_value(smooth)
+
+            # Phase 1: CC dead zone — skip if change too small
+            min_change = int(mapping.get("min_change", 0))
+            if min_change > 0:
+                last_sent = state.get("last_cc")
+                if last_sent is not None and abs(cc_val - last_sent) < min_change:
+                    continue
+                state["last_cc"] = cc_val
+
+            sink.send_cc(channel, cc, cc_val, meta)
             continue
 
         if mode == "note":
@@ -171,6 +515,31 @@ def process_event(event: Dict[str, Any], config: Dict[str, Any], states: Dict[in
             elif active and smooth <= (threshold - hysteresis):
                 sink.send_note_off(channel, note, 0, meta)
                 state["note_active"] = False
+            continue
+
+        if mode == "pulse":
+            note = int(mapping.get("note", 36))
+            velocity = int(mapping.get("velocity", 100))
+            vel_from_input = mapping.get("velocity_from_input")
+            if vel_from_input:
+                velocity = to_velocity(smooth)
+            sink.send_note_on(channel, note, velocity, meta)
+            sink.send_note_off(channel, note, 0, meta)
+            continue
+
+        # Phase 3: pitch bend
+        if mode == "pitchbend":
+            pb = to_pitchbend(smooth)
+            sink.send_pitchbend(channel, pb, meta)
+            continue
+
+        # Phase 3: program change (triggers once when condition/zone met)
+        if mode == "program_change":
+            program = int(mapping.get("program", 0))
+            already_sent = state.get("pc_sent")
+            if not already_sent:
+                sink.send_program_change(channel, program, meta)
+                state["pc_sent"] = True
             continue
 
         eprint(f"Unknown mode: {mode}")
@@ -204,6 +573,10 @@ def main() -> int:
     if not args.dry_run and sink.mido is None:
         eprint("mido not available; falling back to MIDI-intent JSON output")
 
+    # Phase 2: derived inputs engine
+    rr_window = int(config.get("derived_rr_window", 20))
+    derived = DerivedInputs(rr_window=rr_window)
+
     states: Dict[int, Dict[str, Any]] = {}
 
     for line in sys.stdin:
@@ -218,6 +591,9 @@ def main() -> int:
         if not isinstance(event, dict):
             eprint("JSON line must be an object")
             continue
+
+        # Augment event with derived inputs before mapping
+        event = derived.update(event)
         process_event(event, config, states, sink)
 
     return 0

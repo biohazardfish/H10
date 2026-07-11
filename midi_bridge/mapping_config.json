@@ -1,52 +1,83 @@
 {
-  "version": 1,
+  "version": 3,
+  "derived_rr_window": 20,
   "mappings": [
     {
+      "_comment": "每一次心跳 → kick (Note 36 / C1)",
+      "input": "beat",
+      "min": 0,
+      "max": 1,
+      "mode": "pulse",
+      "note": 36,
+      "channel": 10,
+      "velocity": 100
+    },
+    {
+      "_comment": "BPM → CC 74 (filter cutoff), log curve 讓低心率段更敏感",
       "input": "bpm",
       "min": 50,
       "max": 180,
       "mode": "cc",
       "cc": 74,
       "channel": 1,
+      "curve": "log",
+      "min_change": 2,
       "smoothing": {"type": "ema", "alpha": 0.2}
     },
     {
+      "_comment": "RR interval → CC 71 (resonance), median 濾波抗 BLE 突刺",
       "input": "rr_ms",
       "min": 400,
       "max": 1200,
       "mode": "cc",
       "cc": 71,
       "channel": 1,
-      "smoothing": {"type": "ema", "alpha": 0.3}
+      "curve": "scurve",
+      "min_change": 2,
+      "smoothing": {"type": "median", "window": 5}
     },
     {
-      "input": "contact",
+      "_comment": "HRV RMSSD → CC 1 (mod wheel), 高 HRV = 更多 modulation",
+      "input": "hrv_rmssd",
       "min": 0,
-      "max": 1,
-      "mode": "cc",
-      "cc": 91,
-      "channel": 1,
-      "smoothing": {"type": "ema", "alpha": 0.1}
-    },
-    {
-      "input": "motion",
-      "min": 0,
-      "max": 1,
+      "max": 100,
       "mode": "cc",
       "cc": 1,
       "channel": 1,
-      "smoothing": {"type": "attack_release", "attack": 0.25, "release": 0.1}
+      "curve": "exp",
+      "min_change": 3,
+      "smoothing": {"type": "moving_average", "window": 8}
     },
     {
-      "input": "bpm",
-      "min": 90,
-      "max": 140,
-      "mode": "note",
-      "note": 36,
+      "_comment": "RR 瞬時變化 → pitch bend, rate_limit 防止跳動太劇烈",
+      "input": "rr_delta",
+      "min": 0,
+      "max": 80,
+      "mode": "pitchbend",
       "channel": 1,
-      "trigger_threshold": 0.7,
-      "hysteresis": 0.1,
-      "smoothing": {"type": "ema", "alpha": 0.15}
+      "curve": "scurve",
+      "smoothing": {"type": "rate_limit", "max_delta": 0.05}
+    },
+    {
+      "_comment": "高心率區 (>=140) → 加 snare trigger",
+      "input": "bpm",
+      "min": 140,
+      "max": 200,
+      "mode": "pulse",
+      "note": 38,
+      "channel": 10,
+      "velocity_from_input": true,
+      "condition": {"field": "bpm", "op": ">=", "value": 140}
+    },
+    {
+      "_comment": "BPM 進入 zone [150,200] → 切換到 program 42 (高強度音色)",
+      "input": "bpm",
+      "min": 50,
+      "max": 200,
+      "mode": "program_change",
+      "channel": 1,
+      "program": 42,
+      "zone": [150, 200]
     }
   ]
 }
