@@ -6,7 +6,7 @@ from bleak import BleakClient, BleakScanner
 
 # 上次掃描到的 Polar H10 位址（macOS 的 BLE UUID 可能會變，
 # 找不到時會自動改用名稱掃描）
-H10_ADDRESS = "BCBA9017-479D-B12A-933D-204CBCA3DF70"
+H10_ADDRESS = "E4C4B7DF-21E1-D1F5-9332-BC6D394F15C8"
 
 # 標準 Heart Rate Measurement characteristic UUID
 HEART_RATE_CHAR_UUID = "00002a37-0000-1000-8000-00805f9b34fb"
