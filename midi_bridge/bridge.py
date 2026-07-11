@@ -320,9 +320,10 @@ class DerivedInputs:
 
 
 class MidiSink:
-    def __init__(self, dry_run: bool, port_name: Optional[str]) -> None:
+    def __init__(self, dry_run: bool, port_name: Optional[str], virtual: bool = False) -> None:
         self.dry_run = dry_run
         self.port_name = port_name
+        self.virtual = virtual
         self.mido = None
         self.port = None
 
@@ -337,7 +338,11 @@ class MidiSink:
             return
 
         try:
-            if self.port_name:
+            if self.virtual:
+                name = self.port_name or "H10 Bridge"
+                self.port = self.mido.open_output(name, virtual=True)
+                eprint(f"Opened virtual MIDI output: {name}")
+            elif self.port_name:
                 self.port = self.mido.open_output(self.port_name)
             else:
                 self.port = self.mido.open_output()
@@ -562,13 +567,18 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional MIDI output port name (if mido is available)",
     )
+    parser.add_argument(
+        "--virtual",
+        action="store_true",
+        help="Create a virtual MIDI output port (default name: 'H10 Bridge')",
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
     config = load_config(args.config)
-    sink = MidiSink(dry_run=args.dry_run, port_name=args.port)
+    sink = MidiSink(dry_run=args.dry_run, port_name=args.port, virtual=args.virtual)
 
     if not args.dry_run and sink.mido is None:
         eprint("mido not available; falling back to MIDI-intent JSON output")

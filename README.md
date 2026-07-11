@@ -2,8 +2,25 @@
 
 Project overview: simple Python utilities for Polar H10 BLE heart rate measurement.
 - `scan_h10.py`: scan nearby BLE devices to find the H10 address.
-- `h10_hr_live.py`: connect to H10 and print live heart rate (BPM).
+- `h10_hr_live.py`: connect to H10 and emit one JSONL event per heartbeat.
 - `h10_hr_log.py`: connect to H10, print BPM, and append to CSV.
+- `monitor.py`: transparent pipeline stage serving a live dashboard at `localhost:8931`.
+
+## Full chain (heartbeat → sound)
+Run in a terminal that has Bluetooth permission:
+```
+./venv/bin/python h10_hr_live.py | ./venv/bin/python monitor.py | \
+  ./venv/bin/python midi_bridge/bridge.py --config midi_bridge/mapping_config.json --virtual --port "H10 Bridge"
+```
+Open http://localhost:8931 to watch BPM / RR / HRV live. REAPER (with the
+"H10 Bridge" MIDI input enabled) receives kick-per-beat on ch10 and a drone
+with HRV pitch bend on ch1.
+
+Demo without the strap (no BLE, no MIDI):
+```
+./venv/bin/python midi_bridge/examples/sim_heartbeat.py midi_bridge/examples/h10_sample_events.jsonl | \
+  ./venv/bin/python monitor.py | ./venv/bin/python midi_bridge/bridge.py --config midi_bridge/mapping_config.json --dry-run > /dev/null
+```
 
 ## Folder layout
 ```

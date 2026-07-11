@@ -13,6 +13,16 @@
       "velocity": 100
     },
     {
+      "_comment": "持續 drone (C3)，第一拍 note_on 後保持，作為 pitch bend / CC 的載體",
+      "input": "beat",
+      "min": 0,
+      "max": 1,
+      "mode": "note",
+      "note": 48,
+      "channel": 1,
+      "trigger_threshold": 0.5
+    },
+    {
       "_comment": "BPM → CC 74 (filter cutoff), log curve 讓低心率段更敏感",
       "input": "bpm",
       "min": 50,
@@ -49,9 +59,9 @@
       "smoothing": {"type": "moving_average", "window": 8}
     },
     {
-      "_comment": "RR 瞬時變化 → pitch bend, rate_limit 防止跳動太劇烈",
+      "_comment": "RR 瞬時變化 → pitch bend, min=-80 讓 rr_delta=0 落在中心 (bend=0)",
       "input": "rr_delta",
-      "min": 0,
+      "min": -80,
       "max": 80,
       "mode": "pitchbend",
       "channel": 1,
