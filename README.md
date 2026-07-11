@@ -17,16 +17,18 @@ H10/
 ```
 
 ## How to run
-All scripts are standalone. They rely on the `bleak` package.
+All scripts are standalone. They rely on the `bleak` package (BLE); the
+MIDI bridge additionally uses `mido` for real MIDI output.
 
-1) (Optional) activate the local venv if you want to use it:
+1) Create and activate a virtual environment:
 ```
+python3 -m venv venv
 source venv/bin/activate
 ```
 
-2) Install dependency (if not already installed):
+2) Install dependencies:
 ```
-pip3 install bleak
+pip3 install -r requirements.txt
 ```
 
 3) Scan for the device address (10-second scan):
