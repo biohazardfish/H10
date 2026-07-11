@@ -2,9 +2,10 @@ import asyncio
 import datetime
 import json
 import sys
-from bleak import BleakClient
+from bleak import BleakClient, BleakScanner
 
-# 把這裡換成你剛剛掃描到的 Polar H10 地址（括號裡那串）
+# 上次掃描到的 Polar H10 位址（macOS 的 BLE UUID 可能會變，
+# 找不到時會自動改用名稱掃描）
 H10_ADDRESS = "BCBA9017-479D-B12A-933D-204CBCA3DF70"
 
 # 標準 Heart Rate Measurement characteristic UUID
@@ -69,9 +70,37 @@ def handle_hr_notification(sender: int, data: bytearray):
     print(f"HR: {bpm} bpm  RR: [{rr_str}] ms  (raw: {data.hex()})", file=sys.stderr)
 
 
+async def resolve_address() -> str:
+    """先試既有位址；掃不到就改用裝置名稱搜尋 Polar。"""
+    device = await BleakScanner.find_device_by_address(H10_ADDRESS, timeout=5.0)
+    if device is not None:
+        return H10_ADDRESS
+
+    print("既有位址掃不到，改用名稱搜尋 Polar（約 10 秒）...", file=sys.stderr)
+    device = await BleakScanner.find_device_by_filter(
+        lambda d, ad: bool(d.name and "polar" in d.name.lower()),
+        timeout=10.0,
+    )
+    if device is None:
+        print(
+            "掃不到 Polar H10。請確認：1) 錶帶電極貼緊皮膚（有接觸才會廣播）"
+            " 2) 手機的 Polar Flow / 其他 app 沒有佔住連線",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    print(
+        f"找到 {device.name} @ {device.address}"
+        f"（可更新 h10_hr_live.py 的 H10_ADDRESS 以加快下次連線）",
+        file=sys.stderr,
+    )
+    return device.address
+
+
 async def main():
-    print(f"Connecting to Polar H10 at {H10_ADDRESS} ...", file=sys.stderr)
-    async with BleakClient(H10_ADDRESS) as client:
+    address = await resolve_address()
+    print(f"Connecting to Polar H10 at {address} ...", file=sys.stderr)
+    async with BleakClient(address) as client:
         if not client.is_connected:
             print("連線失敗", file=sys.stderr)
             return

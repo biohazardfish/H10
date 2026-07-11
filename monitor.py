@@ -26,7 +26,7 @@ def broadcast(payload: str) -> None:
             q.put(payload)
 
 
-def reader() -> None:
+def reader(server) -> None:
     """讀 stdin、轉發 stdout、廣播給所有瀏覽器。"""
     for line in sys.stdin:
         line = line.strip()
@@ -49,6 +49,11 @@ def reader() -> None:
         sys.stdout.close()
     except Exception:
         pass
+    # 串流結束後保留頁面 30 秒讓人看到最終狀態，然後釋放埠退出，
+    # 避免上游掛掉時殘留程序一直佔著埠
+    print("上游串流結束，30 秒後關閉監控頁面", file=sys.stderr)
+    time.sleep(30)
+    server.shutdown()
 
 
 PAGE = """<!DOCTYPE html>
@@ -239,8 +244,8 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=8931)
     args = parser.parse_args()
 
-    threading.Thread(target=reader, daemon=True).start()
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+    threading.Thread(target=reader, args=(server,), daemon=True).start()
     print(f"監控頁面: http://localhost:{args.port}", file=sys.stderr)
     try:
         server.serve_forever()
