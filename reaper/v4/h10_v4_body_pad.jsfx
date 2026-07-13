@@ -1,0 +1,105 @@
+desc:H10 V4 Body Pad
+tags:H10 V4 modal pad warm organic generator
+
+slider1:0.27<0,1,0.01>Base level
+slider2:4<1,12,0.5>Root crossfade (s)
+
+in_pin:none
+out_pin:left
+out_pin:right
+
+@init
+regulation = 0.5;
+uprightness = 0;
+fluidity = 0.5;
+scene = 0;
+performance_gate = 0;
+gate = 0;
+warmth = 0.68;
+hrv_response = 0.6;
+stereo_width = 0.7;
+bio_depth = 0.8;
+fader_body = 0.55;
+root_old = 50;
+root_new = 50;
+root_fade = 1;
+op1 = op2 = op3 = op4 = 0;
+np1 = np2 = np3 = np4 = 0;
+lfo = 0;
+lpL = lpR = 0;
+idle_samples = 1000000000;
+
+@slider
+base_level = slider1;
+root_fade_inc = 1 / max(1, slider2 * srate);
+
+@block
+while (midirecv(offset, msg1, msg23)) (
+  status = msg1 & $xF0;
+  chan = msg1 & $x0F;
+  data1 = msg23 & $xFF;
+  data2 = (msg23 / 256) & $xFF;
+  (chan == 0 || chan == 9) ? idle_samples = 0;
+
+  status == $xB0 && chan == 0 && data1 == 11 ? regulation = data2 / 127;
+  status == $xB0 && chan == 0 && data1 == 13 ? uprightness = data2 / 127;
+  status == $xB0 && chan == 0 && data1 == 15 ? fluidity = data2 / 127;
+  status == $xB0 && chan == 0 && data1 == 18 ? scene = data2 / 127;
+  status == $xB0 && chan == 0 && data1 == 119 ? performance_gate = data2 / 127;
+
+  status == $xB0 && chan == 1 && data1 == 22 ? warmth = data2 / 127;
+  status == $xB0 && chan == 1 && data1 == 25 ? hrv_response = data2 / 127;
+  status == $xB0 && chan == 1 && data1 == 26 ? stereo_width = data2 / 127;
+  status == $xB0 && chan == 1 && data1 == 27 ? bio_depth = data2 / 127;
+  status == $xB0 && chan == 1 && data1 == 30 ? fader_body = data2 / 127;
+
+  status == $x90 && chan == 1 && data2 > 0 ? (
+    target_root = 48 + (data1 % 12);
+    target_root != root_new ? (
+      root_old = root_new;
+      root_new = target_root;
+      root_fade = 0;
+    );
+  );
+  midisend(offset, msg1, msg23);
+);
+
+@sample
+idle_samples += 1;
+idle_samples > srate * 3 ? performance_gate = 0;
+gate += (performance_gate - gate) * (performance_gate > gate ? 0.00045 : 0.00007);
+root_fade = min(1, root_fade + root_fade_inc);
+old_weight = cos(root_fade * $pi * 0.5);
+new_weight = sin(root_fade * $pi * 0.5);
+freq_old = 440 * exp(log(2) * (root_old - 69) / 12);
+freq_new = 440 * exp(log(2) * (root_new - 69) / 12);
+
+lfo += 2 * $pi * (0.025 + fluidity * 0.035) / srate;
+lfo > 2*$pi ? lfo -= 2*$pi;
+detune = 1 + sin(lfo) * (0.0008 + stereo_width * 0.0022);
+op1 += 2*$pi*freq_old/srate; op2 += 2*$pi*freq_old*1.5*detune/srate;
+op3 += 2*$pi*freq_old*2.244924/srate; op4 += 2*$pi*freq_old*3.333/srate;
+np1 += 2*$pi*freq_new/srate; np2 += 2*$pi*freq_new*1.5*detune/srate;
+np3 += 2*$pi*freq_new*2.244924/srate; np4 += 2*$pi*freq_new*3.333/srate;
+op1 > 2*$pi ? op1 -= 2*$pi; op2 > 2*$pi ? op2 -= 2*$pi;
+op3 > 2*$pi ? op3 -= 2*$pi; op4 > 2*$pi ? op4 -= 2*$pi;
+np1 > 2*$pi ? np1 -= 2*$pi; np2 > 2*$pi ? np2 -= 2*$pi;
+np3 > 2*$pi ? np3 -= 2*$pi; np4 > 2*$pi ? np4 -= 2*$pi;
+
+colour = regulation * hrv_response * bio_depth;
+lift = uprightness * 0.16 + scene * 0.14;
+memory = max(0, (scene - 0.75) * 4);
+oldL = sin(op1) * 0.34 + sin(op2) * (0.20 + colour * 0.08) + sin(op3) * (0.10 + lift) + sin(op4) * memory * 0.045;
+oldR = sin(op1 + stereo_width*0.16) * 0.34 + sin(op2 + stereo_width*0.75) * (0.20 + colour * 0.08) + sin(op3 + stereo_width*1.1) * (0.10 + lift) + sin(op4 + 0.9) * memory * 0.045;
+newL = sin(np1) * 0.34 + sin(np2) * (0.20 + colour * 0.08) + sin(np3) * (0.10 + lift) + sin(np4) * memory * 0.045;
+newR = sin(np1 + stereo_width*0.16) * 0.34 + sin(np2 + stereo_width*0.75) * (0.20 + colour * 0.08) + sin(np3 + stereo_width*1.1) * (0.10 + lift) + sin(np4 + 0.9) * memory * 0.045;
+rawL = oldL * old_weight + newL * new_weight;
+rawR = oldR * old_weight + newR * new_weight;
+brightness = (1-warmth)*0.45 + colour*0.25 + uprightness*0.2;
+coef = 0.004 + brightness * 0.04;
+lpL += coef * (rawL - lpL);
+lpR += coef * (rawR - lpR);
+scene_gain = 0.46 + 0.34 * sin(min(1, scene*1.25) * $pi * 0.5) + memory * 0.12;
+level = base_level * fader_body * scene_gain;
+spl0 = lpL * level * gate;
+spl1 = lpR * level * gate;

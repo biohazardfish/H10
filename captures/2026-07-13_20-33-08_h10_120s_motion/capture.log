@@ -1,0 +1,18 @@
+CAPTURE_DIR=/Users/taichengwong/Projects/H10/captures/2026-07-13_20-33-08_h10_120s_motion
+Connecting to Polar H10 at E4C4B7DF-21E1-D1F5-9332-BC6D394F15C8
+Available PMD measurements: ['ECG', 'ACC']
+ACC start response: (0, 'SUCCESS', bytearray(b'\xf0\x02\x02\x00\x00\x01'))
+GYRO not available; Polar H10 normally exposes accelerometer, not gyroscope.
+Recording 120s. Move slowly now.
+elapsed=0.5s hr_events=0 acc_samples=0 raw_motion_frames=0
+elapsed=10.6s hr_events=21 acc_samples=468 raw_motion_frames=0
+elapsed=20.6s hr_events=42 acc_samples=972 raw_motion_frames=0
+elapsed=30.7s hr_events=66 acc_samples=1512 raw_motion_frames=0
+elapsed=40.7s hr_events=88 acc_samples=2016 raw_motion_frames=0
+elapsed=50.8s hr_events=110 acc_samples=2520 raw_motion_frames=0
+elapsed=60.8s hr_events=132 acc_samples=3024 raw_motion_frames=0
+elapsed=70.9s hr_events=154 acc_samples=3564 raw_motion_frames=0
+elapsed=80.9s hr_events=176 acc_samples=4068 raw_motion_frames=0
+elapsed=91.0s hr_events=198 acc_samples=4572 raw_motion_frames=0
+elapsed=101.0s hr_events=219 acc_samples=5076 raw_motion_frames=0
+elapsed=111.1s hr_events=240 acc_samples=5616 raw_motion_frames=0

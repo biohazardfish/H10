@@ -1,0 +1,51 @@
+{
+  "capture_folder": "/Users/taichengwong/Projects/H10/captures/2026-07-13_20-33-08_h10_120s_motion",
+  "started_at": "2026-07-13T20:33:17+08:00",
+  "ended_at": "2026-07-13T20:35:18+08:00",
+  "duration_s": 120,
+  "available_pmd_measurements": [
+    "ECG",
+    "ACC"
+  ],
+  "acc_started": true,
+  "gyro_started": false,
+  "acc_start_response": "(0, 'SUCCESS', bytearray(b'\\xf0\\x02\\x02\\x00\\x00\\x01'))",
+  "gyro_start_response": "None",
+  "hr_event_count": 258,
+  "acc_sample_count": 6084,
+  "raw_motion_frame_count": 0,
+  "bpm": {
+    "count": 258,
+    "min": 116.0,
+    "max": 137.0,
+    "mean": 129.45348837209303,
+    "median": 130.0,
+    "stdev": 4.681257380585732
+  },
+  "rr_ms": {
+    "count": 258,
+    "min": 436.0,
+    "max": 879.0,
+    "mean": 465.67054263565893,
+    "median": 462.0,
+    "stdev": 31.900806628009118
+  },
+  "rmssd_ms": 39.08675375451571,
+  "sdnn_ms": 31.900806628009118,
+  "acc_magnitude_mg": {
+    "count": 6084,
+    "min": 709.684,
+    "max": 1267.935,
+    "mean": 963.9498344838921,
+    "median": 953.48,
+    "stdev": 56.005385433197524
+  },
+  "acc_dynamic_abs_mg_from_1g": {
+    "count": 6084,
+    "min": 0.04100000000005366,
+    "max": 290.31600000000003,
+    "mean": 56.735982741617356,
+    "median": 53.119500000000016,
+    "stdev": 34.884529028263884
+  }
+}

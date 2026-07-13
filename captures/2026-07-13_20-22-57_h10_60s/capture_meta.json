@@ -1,0 +1,11 @@
+{
+  "command": [
+    "/Users/taichengwong/Projects/H10/venv/bin/python",
+    "/Users/taichengwong/Projects/H10/h10_hr_live.py"
+  ],
+  "working_directory": "/Users/taichengwong/Projects/H10",
+  "raw_jsonl": "/Users/taichengwong/Projects/H10/captures/2026-07-13_20-22-57_h10_60s/h10_events.jsonl",
+  "stderr_log": "/Users/taichengwong/Projects/H10/captures/2026-07-13_20-22-57_h10_60s/h10_capture.log",
+  "csv": "/Users/taichengwong/Projects/H10/captures/2026-07-13_20-22-57_h10_60s/h10_events.csv",
+  "summary_json": "/Users/taichengwong/Projects/H10/captures/2026-07-13_20-22-57_h10_60s/summary.json"
+}

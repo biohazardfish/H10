@@ -1,36 +1,23 @@
 import asyncio
 import datetime
-from bleak import BleakClient
+import sys
 
-# 用你剛剛掃描到的 Polar H10 地址
-H10_ADDRESS = "BCBA9017-479D-B12A-933D-204CBCA3DF70"
-
-# 標準 Heart Rate Measurement characteristic UUID
-HEART_RATE_CHAR_UUID = "00002a37-0000-1000-8000-00805f9b34fb"
+from h10_common import (
+    HEART_RATE_CHAR_UUID,
+    H10NotFoundError,
+    parse_heart_rate,
+    resolve_h10_address,
+)
 
 log_file = None  # 之後會在 main 裡打開
 
 
-def parse_heart_rate(data: bytes) -> int:
-    """依照 Bluetooth Heart Rate Profile 解析 BPM"""
-    if not data:
-        return 0
-
-    flags = data[0]
-    hr_16bit = flags & 0x01  # 第 0 bit：0 = uint8, 1 = uint16
-
-    if hr_16bit == 0 and len(data) >= 2:
-        # uint8 心率
-        return data[1]
-    elif hr_16bit == 1 and len(data) >= 3:
-        # uint16 心率（小端）
-        return int.from_bytes(data[1:3], byteorder="little")
-    else:
-        return 0
-
-
 async def main():
     global log_file
+    from bleak import BleakClient
+
+    address = await resolve_h10_address()
+    print(f"Connecting to Polar H10 at {address} ...")
 
     # 打開 / 建立 CSV 檔案（跟這個 .py 同一個資料夾）
     log_file = open("h10_hr_log.csv", "a", buffering=1, encoding="utf-8")
@@ -39,8 +26,7 @@ async def main():
     if log_file.tell() == 0:
         log_file.write("timestamp,bpm\n")
 
-    print(f"Connecting to Polar H10 at {H10_ADDRESS} ...")
-    async with BleakClient(H10_ADDRESS) as client:
+    async with BleakClient(address) as client:
         if not client.is_connected:
             print("連線失敗")
             log_file.close()
@@ -50,7 +36,8 @@ async def main():
 
         # 定義通知 callback，放在 main 裡，這樣拿得到 log_file
         def handle_hr_notification(sender: int, data: bytearray):
-            bpm = parse_heart_rate(data)
+            parsed = parse_heart_rate(data)
+            bpm = parsed["bpm"]
             ts = datetime.datetime.now().isoformat(timespec="seconds")
             # 終端顯示
             print(f"{ts}  HR: {bpm} bpm")
@@ -78,6 +65,9 @@ async def main():
 if __name__ == "__main__":
     try:
         asyncio.run(main())
+    except H10NotFoundError as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(1)
     except KeyboardInterrupt:
         # 再保險一次，確保 Ctrl+C 不會丟一堆 traceback 嚇你
         print("\n手動停止程式。")

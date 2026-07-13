@@ -1,0 +1,14 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "hr-monitor-demo",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "./venv/bin/python midi_bridge/examples/sim_heartbeat.py midi_bridge/examples/h10_sample_events.jsonl | ./venv/bin/python monitor.py --port 8931 | ./venv/bin/python midi_bridge/bridge.py --config midi_bridge/mapping_config.json --dry-run > /dev/null"
+      ],
+      "port": 8931
+    }
+  ]
+}

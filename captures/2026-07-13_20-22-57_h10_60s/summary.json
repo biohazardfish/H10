@@ -1,0 +1,29 @@
+{
+  "capture_folder": "/Users/taichengwong/Projects/H10/captures/2026-07-13_20-22-57_h10_60s",
+  "started_at": "2026-07-13T20:23:05+08:00",
+  "ended_at": "2026-07-13T20:24:05+08:00",
+  "requested_duration_s": 60,
+  "observed_duration_s": 59.194,
+  "event_count": 108,
+  "valid_rr_count": 108,
+  "bpm": {
+    "count": 108,
+    "min": 106.0,
+    "max": 111.0,
+    "mean": 108.60185185185185,
+    "median": 109.0,
+    "stdev": 1.3803684650637065
+  },
+  "rr_ms": {
+    "count": 108,
+    "min": 521.0,
+    "max": 592.0,
+    "mean": 553.0370370370371,
+    "median": 553.0,
+    "stdev": 13.698984153569086
+  },
+  "rmssd_ms": 7.707260807762931,
+  "sdnn_ms": 13.698984153569086,
+  "effective_bpm_from_beats": 109.47055444808595,
+  "reader_exit_code": -2
+}

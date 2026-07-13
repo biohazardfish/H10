@@ -1,15 +1,20 @@
 #!/usr/bin/env python3
-"""H10 JSONL -> MIDI bridge.
+"""H10 JSONL -> MIDI bridge (V3 validated baseline + reliability hardening).
 
-The active V3 meditation mapping is deliberately small and static:
-
-  * CC10 = heart rate
-  * CC11 = RMSSD
-  * Note 36 = heartbeat pulse
-  * CC14 = current RR interval
-
-The existing JSONL -> mapping config -> MIDI sink architecture is preserved,
-including clean MIDI shutdown and hard failure when real MIDI cannot be opened.
+Reliability fixes on top of the validated V3 pipeline (architecture unchanged):
+  1. Clean MIDI shutdown: track active notes; on stdin EOF / KeyboardInterrupt /
+     unexpected exit, send Note Off for every active note and CC123 (All Notes
+     Off) on every used channel before closing the port -> the sustained drone
+     can no longer stay stuck.
+  2. Invalid-RR handling: RR values that are missing / zero / negative /
+     physiologically implausible are ignored by every mapping and by the HRV
+     maths (never treated as a real interval).
+  3. rr_delta is now a SIGNED delta (rr - prev_rr), so the -80..80 pitch-bend
+     mapping bends both directions instead of only upward from centre.
+  4. Program Change re-triggers on zone re-entry (edge-detected) instead of
+     firing once and never again.
+  5. No silent JSON fallback: outside --dry-run, if MIDI init or port opening
+     fails the bridge prints a clear error and exits non-zero.
 """
 
 import argparse
@@ -17,7 +22,6 @@ import collections
 import json
 import math
 import sys
-import time
 from typing import Any, Deque, Dict, List, Optional, Set, Tuple
 
 
@@ -25,101 +29,33 @@ def eprint(msg: str) -> None:
     print(msg, file=sys.stderr)
 
 
-VALID_MODES = {"cc", "note", "pulse"}
+VALID_MODES = {"cc", "note", "pulse", "pitchbend", "program_change"}
 VALID_CURVES = {"linear", "log", "exp", "scurve"}
 VALID_SMOOTHING_TYPES = {"ema", "attack_release", "moving_average", "median", "rate_limit"}
 VALID_CONDITION_OPS = {"<", "<=", ">", ">=", "==", "!="}
 
 BUILTIN_INPUTS = {"bpm", "rr_ms", "beat"}
-DERIVED_INPUTS = {"hrv_rmssd"}
+DERIVED_INPUTS = {"hrv_rmssd", "hrv_sdnn", "rr_delta", "bpm_accel"}
 ALL_KNOWN_INPUTS = BUILTIN_INPUTS | DERIVED_INPUTS
-STATIC_MEDITATION_OUTPUTS = {
-    ("bpm", "cc", 10),
-    ("hrv_rmssd", "cc", 11),
-    ("beat", "pulse", 36),
-    ("rr_ms", "cc", 14),
-}
 
-# Physiologically plausible RR interval window in milliseconds.
+# Fix 2: physiologically plausible RR interval window in milliseconds.
 # 270 ms ~= 222 bpm ceiling; 2000 ms = 30 bpm floor. Anything outside
 # (including 0, negative, or None) is treated as "no RR this packet".
 RR_MIN_MS = 270.0
 RR_MAX_MS = 2000.0
 
-H10_MIDI_MAPPING = {
-    "hr": {
-        "type": "cc",
-        "input": "bpm",
-        "controller": 10,
-        "input_min": 40.0,
-        "input_max": 180.0,
-    },
-    "rmssd": {
-        "type": "cc",
-        "input": "hrv_rmssd",
-        "controller": 11,
-        "input_min": 5.0,
-        "input_max": 100.0,
-    },
-    "heartbeat": {
-        "type": "note",
-        "input": "beat",
-        "note": 36,
-        "velocity": 80,
-        "gate_ms": 80,
-    },
-    "rr_interval": {
-        "type": "cc",
-        "input": "rr_ms",
-        "controller": 14,
-        "input_min": 400.0,
-        "input_max": 1500.0,
-    },
-}
-
-
-def finite_float(value: Any) -> Optional[float]:
-    try:
-        out = float(value)
-    except (TypeError, ValueError):
-        return None
-    if not math.isfinite(out):
-        return None
-    return out
-
 
 def is_valid_rr(rr: Any) -> bool:
     """True only for a finite RR interval inside the physiological window."""
-    rr = finite_float(rr)
     if rr is None:
         return False
+    try:
+        rr = float(rr)
+    except (TypeError, ValueError):
+        return False
+    if not math.isfinite(rr):
+        return False
     return RR_MIN_MS <= rr <= RR_MAX_MS
-
-
-def calculate_rmssd(rr_values: List[float]) -> Optional[float]:
-    """Calculate RMSSD from a rolling list of already validated RR intervals."""
-    if len(rr_values) < 2:
-        return None
-    diffs_sq = []
-    for i in range(1, len(rr_values)):
-        current = finite_float(rr_values[i])
-        previous = finite_float(rr_values[i - 1])
-        if current is None or previous is None:
-            return None
-        diffs_sq.append((current - previous) ** 2)
-    if not diffs_sq:
-        return None
-    return math.sqrt(sum(diffs_sq) / len(diffs_sq))
-
-
-def map_range_to_midi(value: Any, input_min: float, input_max: float) -> Optional[int]:
-    """Map a finite input range linearly to MIDI 0..127, clamped."""
-    value = finite_float(value)
-    input_min = finite_float(input_min)
-    input_max = finite_float(input_max)
-    if value is None or input_min is None or input_max is None or input_max == input_min:
-        return None
-    return int(round(normalize(value, input_min, input_max) * 127))
 
 
 # ---------------------------------------------------------------------------
@@ -131,8 +67,6 @@ def validate_mapping(idx: int, m: Dict[str, Any]) -> List[str]:
     inp = m.get("input")
     if inp is None:
         errors.append(f"mapping[{idx}]: missing required field 'input'")
-    elif inp not in ALL_KNOWN_INPUTS:
-        errors.append(f"mapping[{idx}]: unknown input '{inp}'")
     mode = m.get("mode", "cc")
     if mode not in VALID_MODES:
         errors.append(f"mapping[{idx}]: unknown mode '{mode}'")
@@ -169,6 +103,17 @@ def validate_mapping(idx: int, m: Dict[str, Any]) -> List[str]:
                 errors.append(f"mapping[{idx}]: note must be 0-127, got {note}")
         except (TypeError, ValueError):
             errors.append(f"mapping[{idx}]: note must be an integer, got {note!r}")
+    if mode == "program_change":
+        prog = m.get("program")
+        if prog is None:
+            errors.append(f"mapping[{idx}]: mode 'program_change' requires 'program'")
+        else:
+            try:
+                prog = int(prog)
+                if prog < 0 or prog > 127:
+                    errors.append(f"mapping[{idx}]: program must be 0-127, got {prog}")
+            except (TypeError, ValueError):
+                errors.append(f"mapping[{idx}]: program must be an integer, got {prog!r}")
     sm = m.get("smoothing")
     if sm is not None:
         st = sm.get("type", "ema")
@@ -204,16 +149,6 @@ def validate_config(config: Dict[str, Any]) -> None:
     all_errors: List[str] = []
     for idx, m in enumerate(mappings):
         all_errors.extend(validate_mapping(idx, m))
-        mode = m.get("mode", "cc")
-        try:
-            target = int(m.get("cc") if mode == "cc" else m.get("note"))
-        except (TypeError, ValueError):
-            target = None
-        if (m.get("input"), mode, target) not in STATIC_MEDITATION_OUTPUTS:
-            all_errors.append(
-                f"mapping[{idx}]: not part of static meditation contract "
-                "(allowed outputs are CC10, CC11, Note36, CC14)"
-            )
     if all_errors:
         eprint("Config validation failed:")
         for e in all_errors:
@@ -318,40 +253,51 @@ def apply_smoothing(value: float, smoothing: Optional[Dict[str, Any]], state: Di
 
 
 # ---------------------------------------------------------------------------
-# Derived inputs (HRV)
+# Derived inputs (HRV) — Fix 2 (RR validation) + Fix 3 (signed rr_delta)
 # ---------------------------------------------------------------------------
 
 class DerivedInputs:
     def __init__(self, rr_window: int = 20) -> None:
         self.rr_window = rr_window
         self.rr_history: Deque[float] = collections.deque(maxlen=rr_window)
+        self.prev_rr: Optional[float] = None
+        self.prev_bpm: Optional[float] = None
 
     def update(self, event: Dict[str, Any]) -> Dict[str, Any]:
         augmented = dict(event)
 
-        bpm = finite_float(event.get("bpm"))
-        if bpm is None:
-            augmented.pop("bpm", None)
-        else:
-            augmented["bpm"] = bpm
-
         rr_raw = event.get("rr_ms")
-        if is_valid_rr(rr_raw):
+        if is_valid_rr(rr_raw):                       # Fix 2
             rr = float(rr_raw)
             augmented["rr_ms"] = rr
 
+            # Fix 3: SIGNED delta (was abs()). Positive = RR lengthened
+            # (heart slowing) -> bend up; negative = RR shortened -> bend down.
+            if self.prev_rr is not None:
+                augmented["rr_delta"] = rr - self.prev_rr
+
             self.rr_history.append(rr)
+            self.prev_rr = rr
 
             if len(self.rr_history) >= 2:
                 rr_list = list(self.rr_history)
-                rmssd = calculate_rmssd(rr_list)
-                if rmssd is not None and math.isfinite(rmssd):
-                    augmented["hrv_rmssd"] = rmssd
+                n = len(rr_list)
+                mean_rr = sum(rr_list) / n
+                variance = sum((x - mean_rr) ** 2 for x in rr_list) / n
+                augmented["hrv_sdnn"] = math.sqrt(variance)
+                diffs_sq = [(rr_list[i] - rr_list[i - 1]) ** 2 for i in range(1, n)]
+                augmented["hrv_rmssd"] = math.sqrt(sum(diffs_sq) / len(diffs_sq))
         else:
-            # Strip invalid/absent RR so no mapping consumes it and no HRV value
-            # is derived from a bogus interval.
+            # Fix 2: strip an invalid/absent rr_ms so no mapping consumes it
+            # and no HRV value is derived from a bogus interval.
             augmented.pop("rr_ms", None)
 
+        bpm = event.get("bpm")
+        if bpm is not None:
+            bpm = float(bpm)
+            if self.prev_bpm is not None:
+                augmented["bpm_accel"] = abs(bpm - self.prev_bpm)
+            self.prev_bpm = bpm
         return augmented
 
 
@@ -435,14 +381,19 @@ class MidiSink:
             return
         self.port.send(self.mido.Message("note_off", channel=channel - 1, note=note, velocity=velocity))
 
-    def sleep_gate(self, gate_ms: Any) -> None:
-        """Hold a real MIDI pulse open briefly. Dry-run stays instant."""
-        if self.dry_run:
+    def send_pitchbend(self, channel, value, meta):
+        self._use_channel(channel)
+        if self.dry_run or self.port is None:
+            self._emit_json({"type": "pitchbend", "channel": channel, "value": value, **meta})
             return
-        gate = finite_float(gate_ms)
-        if gate is None or gate <= 0:
+        self.port.send(self.mido.Message("pitchwheel", channel=channel - 1, pitch=value))
+
+    def send_program_change(self, channel, program, meta):
+        self._use_channel(channel)
+        if self.dry_run or self.port is None:
+            self._emit_json({"type": "program_change", "channel": channel, "program": program, **meta})
             return
-        time.sleep(clamp(gate, 0.0, 1000.0) / 1000.0)
+        self.port.send(self.mido.Message("program_change", channel=channel - 1, program=program))
 
     # -- Fix 1: clean shutdown ---------------------------------------------
     def close(self) -> None:
@@ -457,7 +408,8 @@ class MidiSink:
         for channel, note in sorted(self.active_notes):
             self.send_note_off(channel, note, 0, meta)
         self.active_notes.clear()
-        # 2) CC123 All-Notes-Off on every channel we ever touched.
+        # 2) CC123 All-Notes-Off on every channel we ever touched (kills the
+        #    sustained drone even if our bookkeeping missed anything)
         for channel in sorted(self.used_channels):
             if self.dry_run or self.port is None:
                 self._emit_json({"type": "cc", "channel": channel, "cc": CC_ALL_NOTES_OFF, "value": 0, **meta})
@@ -484,6 +436,10 @@ def to_velocity(norm: float) -> int:
     return max(1, int(round(clamp(norm, 0.0, 1.0) * 127)))
 
 
+def to_pitchbend(norm: float) -> int:
+    return int(round(clamp(norm, 0.0, 1.0) * 16383 - 8192))
+
+
 # ---------------------------------------------------------------------------
 # Condition & zone
 # ---------------------------------------------------------------------------
@@ -492,11 +448,12 @@ def eval_condition(cond: Dict[str, Any], event: Dict[str, Any]) -> bool:
     field = cond.get("field", "")
     if field not in event:
         return False
-    actual = finite_float(event[field])
-    target = finite_float(cond.get("value", 0))
-    if actual is None or target is None:
+    try:
+        actual = float(event[field])
+    except (TypeError, ValueError):
         return False
     op = cond.get("op", ">=")
+    target = float(cond.get("value", 0))
     return {
         "<": actual < target, "<=": actual <= target,
         ">": actual > target, ">=": actual >= target,
@@ -509,17 +466,17 @@ def eval_zone(zone: List[float], raw: float) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Core event processing
+# Core event processing — Fix 4 (program-change zone edge detection)
 # ---------------------------------------------------------------------------
 
 def process_event(event, config, states, sink):
-    emitted: List[Dict[str, Any]] = []
     for idx, mapping in enumerate(config.get("mappings", [])):
         inp = mapping.get("input")
         if inp not in event:
             continue
-        raw = finite_float(event[inp])
-        if raw is None:
+        try:
+            raw = float(event[inp])
+        except Exception:
             eprint(f"Non-numeric input for '{inp}': {event.get(inp)}")
             continue
 
@@ -528,10 +485,14 @@ def process_event(event, config, states, sink):
 
         cond = mapping.get("condition")
         if cond is not None and not eval_condition(cond, event):
+            if mode == "program_change":
+                state["pc_in_zone"] = False   # condition unmet counts as "outside"
             continue
 
         zone = mapping.get("zone")
         if zone is not None and not eval_zone(zone, raw):
+            if mode == "program_change":      # Fix 4: record that we left the zone
+                state["pc_in_zone"] = False
             continue
 
         vmin = float(mapping.get("min", 0.0))
@@ -539,34 +500,19 @@ def process_event(event, config, states, sink):
         norm = normalize(raw, vmin, vmax)
         norm = apply_curve(norm, mapping.get("curve", "linear"))
         smooth = apply_smoothing(norm, mapping.get("smoothing"), state)
-        meta = {
-            "source": inp,
-            "raw": raw,
-            "normalized": norm,
-            "smoothed": smooth,
-            "input_min": vmin,
-            "input_max": vmax,
-        }
+        meta = {"source": inp, "raw": raw, "normalized": norm, "smoothed": smooth}
         channel = int(mapping.get("channel", 1))
 
         if mode == "cc":
             cc = int(mapping.get("cc", 1))
             cc_val = to_cc_value(smooth)
-            max_hz = finite_float(mapping.get("max_hz"))
-            if max_hz is not None and max_hz > 0:
-                now = time.monotonic()
-                last_sent_at = state.get("last_sent_at")
-                if last_sent_at is not None and now - last_sent_at < 1.0 / max_hz:
-                    continue
-            min_change = int(mapping.get("min_change", 1))
+            min_change = int(mapping.get("min_change", 0))
             if min_change > 0:
                 last_sent = state.get("last_cc")
                 if last_sent is not None and abs(cc_val - last_sent) < min_change:
                     continue
                 state["last_cc"] = cc_val
-            state["last_sent_at"] = time.monotonic()
             sink.send_cc(channel, cc, cc_val, meta)
-            emitted.append({"type": "cc", "channel": channel, "cc": cc, "value": cc_val, **meta})
             continue
 
         if mode == "note":
@@ -575,13 +521,10 @@ def process_event(event, config, states, sink):
             hysteresis = float(mapping.get("hysteresis", 0.1))
             active = bool(state.get("note_active", False))
             if not active and smooth >= threshold:
-                velocity = to_velocity(smooth)
-                sink.send_note_on(channel, note, velocity, meta)
-                emitted.append({"type": "note_on", "channel": channel, "note": note, "velocity": velocity, **meta})
+                sink.send_note_on(channel, note, to_velocity(smooth), meta)
                 state["note_active"] = True
             elif active and smooth <= (threshold - hysteresis):
                 sink.send_note_off(channel, note, 0, meta)
-                emitted.append({"type": "note_off", "channel": channel, "note": note, "velocity": 0, **meta})
                 state["note_active"] = False
             continue
 
@@ -590,29 +533,27 @@ def process_event(event, config, states, sink):
             velocity = int(mapping.get("velocity", 100))
             if mapping.get("velocity_from_input"):
                 velocity = to_velocity(smooth)
-            gate_ms = mapping.get("gate_ms")
-            if gate_ms is not None:
-                if (channel, note) in sink.active_notes:
-                    sink.send_note_off(channel, note, 0, meta)
-                    emitted.append({"type": "note_off", "channel": channel, "note": note, "velocity": 0, **meta})
-                sink.send_note_on(channel, note, velocity, meta)
-                emitted.append({"type": "note_on", "channel": channel, "note": note, "velocity": velocity, **meta})
-                sink.sleep_gate(gate_ms)
-                sink.send_note_off(channel, note, 0, meta)
-                emitted.append({"type": "note_off", "channel": channel, "note": note, "velocity": 0, **meta})
-                state["pulse_note_on"] = None
-            else:
-                prev = state.get("pulse_note_on")
-                if prev is not None:
-                    sink.send_note_off(channel, prev, 0, meta)
-                    emitted.append({"type": "note_off", "channel": channel, "note": prev, "velocity": 0, **meta})
-                sink.send_note_on(channel, note, velocity, meta)
-                emitted.append({"type": "note_on", "channel": channel, "note": note, "velocity": velocity, **meta})
-                state["pulse_note_on"] = note
+            prev = state.get("pulse_note_on")
+            if prev is not None:
+                sink.send_note_off(channel, prev, 0, meta)
+            sink.send_note_on(channel, note, velocity, meta)
+            state["pulse_note_on"] = note
+            continue
+
+        if mode == "pitchbend":
+            sink.send_pitchbend(channel, to_pitchbend(smooth), meta)
+            continue
+
+        if mode == "program_change":
+            # Fix 4: fire on the rising edge of zone/condition entry only,
+            # but allow re-fire after we have left and come back.
+            program = int(mapping.get("program", 0))
+            if not state.get("pc_in_zone", False):
+                sink.send_program_change(channel, program, meta)
+            state["pc_in_zone"] = True
             continue
 
         eprint(f"Unknown mode: {mode}")
-    return emitted
 
 
 # ---------------------------------------------------------------------------
@@ -628,63 +569,10 @@ def parse_args():
     return p.parse_args()
 
 
-class BridgeDiagnostics:
-    def __init__(self, config: Dict[str, Any]) -> None:
-        diag = config.get("diagnostics", {})
-        self.enabled = bool(diag.get("enabled", False))
-        self.interval_sec = float(diag.get("interval_sec", 1.0))
-        self.last_print_at = 0.0
-        self.last_cc: Dict[int, int] = {}
-        self.last_note36 = False
-        self.last_smoothed_hr: Optional[float] = None
-
-    def observe(self, event: Dict[str, Any], emitted: List[Dict[str, Any]]) -> None:
-        if not self.enabled:
-            return
-        note36 = False
-        for msg in emitted:
-            if msg.get("type") == "cc" and msg.get("cc") in (10, 11, 14):
-                self.last_cc[int(msg["cc"])] = int(msg["value"])
-                if msg.get("cc") == 10:
-                    input_min = finite_float(msg.get("input_min"))
-                    input_max = finite_float(msg.get("input_max"))
-                    smoothed = finite_float(msg.get("smoothed"))
-                    if input_min is not None and input_max is not None and smoothed is not None:
-                        self.last_smoothed_hr = input_min + smoothed * (input_max - input_min)
-            if msg.get("type") == "note_on" and msg.get("note") == 36:
-                note36 = True
-        self.last_note36 = note36
-
-        now = time.monotonic()
-        if self.last_print_at and now - self.last_print_at < self.interval_sec:
-            return
-        self.last_print_at = now
-
-        def fmt(value: Any, digits: int = 1) -> str:
-            value = finite_float(value)
-            if value is None:
-                return "-"
-            return f"{value:.{digits}f}"
-
-        note_text = "on" if self.last_note36 else "-"
-        eprint(
-            "H10 diag "
-            f"raw_hr={fmt(event.get('bpm'))} "
-            f"smooth_hr={fmt(self.last_smoothed_hr)} "
-            f"rr={fmt(event.get('rr_ms'), 0)} "
-            f"rmssd={fmt(event.get('hrv_rmssd'))} "
-            f"cc10={self.last_cc.get(10, '-')} "
-            f"cc11={self.last_cc.get(11, '-')} "
-            f"cc14={self.last_cc.get(14, '-')} "
-            f"note36={note_text}"
-        )
-
-
 def run(config: Dict[str, Any], sink: MidiSink, stream) -> int:
     """Process a JSONL stream. Always closes the sink (Fix 1)."""
     derived = DerivedInputs(rr_window=int(config.get("derived_rr_window", 20)))
     states: Dict[int, Dict[str, Any]] = {}
-    diagnostics = BridgeDiagnostics(config)
     try:
         for line in stream:
             line = line.strip()
@@ -699,8 +587,7 @@ def run(config: Dict[str, Any], sink: MidiSink, stream) -> int:
                 eprint("JSON line must be an object")
                 continue
             event = derived.update(event)
-            emitted = process_event(event, config, states, sink)
-            diagnostics.observe(event, emitted)
+            process_event(event, config, states, sink)
     except KeyboardInterrupt:                 # Fix 1
         eprint("Interrupted; sending All-Notes-Off and closing MIDI.")
     finally:

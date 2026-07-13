@@ -1,0 +1,79 @@
+desc:H10 V4 Space Return
+tags:H10 V4 dark stereo delay diffusion
+
+slider1:0.42<0,1,0.01>Return level
+slider2:0.58<0,1,0.01>Default room
+
+in_pin:left input
+in_pin:right input
+out_pin:left output
+out_pin:right output
+
+@init
+room = slider2;
+delay_amount = 0.45;
+width = 0.72;
+rotation = 0;
+scene = 0;
+performance_gate = 0;
+gate = 0;
+maxdelay = max(8192, floor(srate * 3));
+bufL = 0;
+bufR = maxdelay + 16;
+write_pos = 0;
+in_lpL = in_lpR = 0;
+wet_lpL = wet_lpR = 0;
+idle_samples = 1000000000;
+
+@slider
+return_level = slider1;
+room = slider2;
+
+@block
+while (midirecv(offset, msg1, msg23)) (
+  status = msg1 & $xF0;
+  chan = msg1 & $x0F;
+  data1 = msg23 & $xFF;
+  data2 = (msg23 / 256) & $xFF;
+  (chan == 0 || chan == 9) ? idle_samples = 0;
+  status == $xB0 && chan == 0 && data1 == 16 ? rotation = data2 / 127;
+  status == $xB0 && chan == 0 && data1 == 18 ? scene = data2 / 127;
+  status == $xB0 && chan == 0 && data1 == 119 ? performance_gate = data2 / 127;
+  status == $xB0 && chan == 1 && data1 == 20 ? room = data2 / 127;
+  status == $xB0 && chan == 1 && data1 == 21 ? delay_amount = data2 / 127;
+  status == $xB0 && chan == 1 && data1 == 26 ? width = data2 / 127;
+  midisend(offset, msg1, msg23);
+);
+
+@sample
+idle_samples += 1;
+idle_samples > srate * 3 ? performance_gate = 0;
+gate += (performance_gate - gate) * (performance_gate > gate ? 0.0004 : 0.000045);
+
+in_lpL += 0.015 * (spl0 - in_lpL);
+in_lpR += 0.015 * (spl1 - in_lpR);
+highL = spl0 - in_lpL;
+highR = spl1 - in_lpR;
+
+d1 = floor(srate * (0.17 + room * 0.38));
+d2 = floor(srate * (0.29 + room * 0.61));
+d3 = floor(srate * (0.43 + room * 0.89));
+r1 = (write_pos - d1 + maxdelay) % maxdelay;
+r2 = (write_pos - d2 + maxdelay) % maxdelay;
+r3 = (write_pos - d3 + maxdelay) % maxdelay;
+tapL = bufL[r1] * 0.52 + bufR[r2] * 0.31 + bufL[r3] * 0.17;
+tapR = bufR[r1] * 0.52 + bufL[r2] * 0.31 + bufR[r3] * 0.17;
+
+feedback = min(0.72, 0.32 + delay_amount * 0.28 + scene * 0.07);
+cross = 0.22 + width * 0.26 + rotation * 0.08;
+bufL[write_pos] = highL + (tapL*(1-cross) + tapR*cross) * feedback;
+bufR[write_pos] = highR + (tapR*(1-cross) + tapL*cross) * feedback;
+write_pos += 1;
+write_pos >= maxdelay ? write_pos = 0;
+
+dark_coef = 0.018 + (1-room)*0.025;
+wet_lpL += dark_coef * (tapL - wet_lpL);
+wet_lpR += dark_coef * (tapR - wet_lpR);
+tail_memory = 0.78 + max(0, scene-0.75) * 0.45;
+spl0 = wet_lpL * return_level * tail_memory * gate;
+spl1 = wet_lpR * return_level * tail_memory * gate;

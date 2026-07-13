@@ -1,39 +1,43 @@
-# H10 → MIDI Mapping Scaffold
+# H10 MIDI Bridge
 
-This scaffold is a lightweight bridge that turns **H10 parameter events** into **MIDI intents**. It is intentionally modular so you can tweak the mapping later without touching code.
+This bridge reads Polar H10 JSONL events on stdin and emits the current V3 static meditation MIDI contract.
 
-## Concept
-1) H10 parameters (e.g., `bpm`, `rr_ms`, `contact`, `motion`) arrive as **JSON lines** on stdin.
-2) Each parameter is normalized into 0..1 using configurable ranges.
-3) The normalized signal is mapped to MIDI CC or notes.
+## Active Mapping
 
-## “Blade Runner 1982” mapping template (defaults, adjustable)
-These are starter defaults designed to evoke a classic, cinematic, slightly “wet” analog vibe:
-- **HR (bpm)** → filter cutoff / brightness (CC74)
-- **RR-interval variability proxy (rr_ms)** → resonance / Q (CC71)
-- **Contact quality / battery (contact)** → reverb send / noise amount (CC91)
-- **Motion proxy (motion)** → modulation / vibrato depth (CC1)
-- **HR peak trigger** → kick or bass pulse (Note 36)
+- `bpm` → CC10 on channel 1, linear 40..180 BPM.
+- rolling RMSSD from valid `rr_ms` values → CC11 on channel 1, linear 5..100 ms.
+- `beat` → Note 36 on channel 10, velocity 80, 80 ms gate.
+- current valid `rr_ms` → CC14 on channel 1, linear 400..1500 ms.
 
-All of the above are editable in `mapping_config.json`.
+No other H10-derived mappings are active. In particular, the bridge does not emit CC12/CC15, motion controls, pitch bend, program change, drone notes, snare triggers, accelerometer, gyroscope, or ECG mappings.
 
 ## Files
-- `bridge.py`: reads JSONL input, applies mapping config, outputs MIDI or MIDI-intent JSON.
-- `mapping_config.json`: the mapping table (input, ranges, smoothing, MIDI target).
-- `examples/h10_sample_events.jsonl`: a short fake sample stream.
-- `run_demo.sh`: runs the dry-run demo with no external dependencies.
 
-## Assumptions used in the demo
-The existing code and CSV log only show `bpm`, so the demo includes **best-guess placeholders** for `rr_ms`, `contact`, and `motion`. These are documented here so you can replace them later.
+- `bridge.py`: reads JSONL input, calculates RMSSD, applies mapping config, and sends MIDI.
+- `mapping_config.json`: the four active mappings and rate-limited diagnostics setting.
+- `examples/h10_sample_events.jsonl`: a calm sample stream.
+- `examples/h10_demo_events.jsonl`: a dynamic sample stream.
+- `run_demo.sh`: runs the bridge in dry-run mode or opens the virtual MIDI port.
 
-## Integration plan (no BLE changes)
-To connect real H10 data later without editing existing scripts:
-1) Create a **new adapter script** that reads from `h10_hr_log.csv` (tail -f) or wraps live prints.
-2) Emit JSONL with fields matching `mapping_config.json` (at minimum `bpm`).
-3) Pipe into `bridge.py`.
+## Quick Demo Without H10
 
-## Quick demo (dry-run)
+```bash
+./midi_bridge/run_demo.sh --dry-run
 ```
-./run_demo.sh
+
+To send the simulated stream to REAPER through a virtual MIDI port named `H10 Bridge`:
+
+```bash
+./midi_bridge/run_demo.sh --sound
 ```
-This will print MIDI-intent JSON lines (no MIDI port required).
+
+The real live pipeline is:
+
+```bash
+./venv/bin/python h10_hr_live.py | \
+  ./venv/bin/python midi_bridge/bridge.py \
+    --config midi_bridge/mapping_config.json \
+    --virtual --port "H10 Bridge"
+```
+
+Normal MIDI mode fails clearly with a non-zero exit code if `mido` cannot be imported or the MIDI port cannot be opened. MIDI-intent JSON is only emitted in `--dry-run` mode.

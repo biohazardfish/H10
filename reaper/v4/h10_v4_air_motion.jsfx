@@ -1,0 +1,82 @@
+desc:H10 V4 Air Motion
+tags:H10 V4 air grains motion generator
+
+slider1:0.18<0,1,0.01>Base level
+slider2:0.55<0,1,0.01>Softness
+
+in_pin:none
+out_pin:left
+out_pin:right
+
+@init
+motion = 0;
+fluidity = 0.5;
+rotation = 0;
+scene = 0;
+performance_gate = 0;
+gate = 0;
+motion_response = 0.7;
+stereo_width = 0.7;
+bio_depth = 0.8;
+fader_air = 0.48;
+counter = 0;
+grain_env = 0;
+tone_phase = 0;
+orbit = 0;
+pink = 0;
+low = 0;
+idle_samples = 1000000000;
+
+@slider
+base_level = slider1;
+softness = slider2;
+
+@block
+while (midirecv(offset, msg1, msg23)) (
+  status = msg1 & $xF0;
+  chan = msg1 & $x0F;
+  data1 = msg23 & $xFF;
+  data2 = (msg23 / 256) & $xFF;
+  (chan == 0 || chan == 9) ? idle_samples = 0;
+  status == $xB0 && chan == 0 && data1 == 12 ? motion = data2 / 127;
+  status == $xB0 && chan == 0 && data1 == 15 ? fluidity = data2 / 127;
+  status == $xB0 && chan == 0 && data1 == 16 ? rotation = data2 / 127;
+  status == $xB0 && chan == 0 && data1 == 18 ? scene = data2 / 127;
+  status == $xB0 && chan == 0 && data1 == 119 ? performance_gate = data2 / 127;
+  status == $xB0 && chan == 1 && data1 == 23 ? motion_response = data2 / 127;
+  status == $xB0 && chan == 1 && data1 == 26 ? stereo_width = data2 / 127;
+  status == $xB0 && chan == 1 && data1 == 27 ? bio_depth = data2 / 127;
+  status == $xB0 && chan == 1 && data1 == 31 ? fader_air = data2 / 127;
+  midisend(offset, msg1, msg23);
+);
+
+@sample
+idle_samples += 1;
+idle_samples > srate * 3 ? performance_gate = 0;
+gate += (performance_gate - gate) * (performance_gate > gate ? 0.0007 : 0.00008);
+effective_motion = motion * (0.25 + 0.75 * motion_response) * bio_depth;
+period = srate * max(0.08, 0.82 - effective_motion * 0.68 - rotation * 0.08);
+counter += 1;
+counter >= period && effective_motion > 0.06 ? (
+  counter = 0;
+  grain_env = 0.25 + effective_motion * 0.75;
+);
+
+frequency = 1200 + rotation * 2600 + fluidity * 700 + scene * 350;
+tone_phase += 2*$pi*frequency/srate;
+tone_phase > 2*$pi ? tone_phase -= 2*$pi;
+orbit += 2*$pi*(0.025 + rotation*0.12)/srate;
+orbit > 2*$pi ? orbit -= 2*$pi;
+
+noise = rand(2)-1;
+pink += (0.012 + softness*0.025) * (noise-pink);
+low += 0.01 * (pink-low);
+air = (pink-low*0.72) * (0.65+softness*0.2) + sin(tone_phase)*0.10*fluidity;
+pan = sin(orbit) * stereo_width * (0.25 + rotation*0.75);
+left_gain = sqrt(max(0, (1-pan)*0.5));
+right_gain = sqrt(max(0, (1+pan)*0.5));
+scene_gain = max(0.05, sin(min(1, scene*1.35)*$pi));
+level = base_level * fader_air * scene_gain;
+spl0 = air * grain_env * left_gain * level * gate;
+spl1 = air * grain_env * right_gain * level * gate;
+grain_env *= exp(-1/(max(0.04, (0.10+fluidity*0.20))*srate));
