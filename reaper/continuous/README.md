@@ -1,7 +1,8 @@
 # H10 Continuous Body Field REAPER assets
 
 Source-controlled JSFX and setup script for the parallel Continuous Body
-Field performance rig. Parallel to `reaper/v4/`, which stays untouched.
+Field performance rig. (Its predecessor `reaper/v4/` was archived on
+2026-07-15 — recover via the `archive-pre-continuous-cleanup` tag.)
 
 Installed locations:
 

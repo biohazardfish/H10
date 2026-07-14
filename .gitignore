@@ -1,14 +1,24 @@
 # Python
 __pycache__/
-*.pyc
-
-# Virtual environments
+*.py[cod]
+.pytest_cache/
 venv/
 
 # Data/log outputs
 *.csv
-h10_hr_log.csv
+*.log
 
 # macOS
 .DS_Store
 .CFUserTextEncoding
+
+# REAPER auto-backups (regenerated constantly while the project is open)
+*.rpp-bak
+reaper_projects/Backups/
+
+# Generated/session output that should never be committed again
+.artifacts/
+outputs/
+
+# Claude Code local state (worktrees, session caches)
+.claude/worktrees/

@@ -126,14 +126,14 @@ port, alive indefinitely:
 - Ctrl+C still stops everything cleanly: `continuous_bridge.py`'s existing
   shutdown path (unchanged) sends gate 0, note-off, and all-notes-off.
 
-`--loop` is off by default, so `midi_bridge/run_performance_demo.sh` (V4)
-and any plain `replay_performance.py` invocation are byte-for-byte
-unaffected — confirmed by diffing a `--speed 1000 --no-sleep` capture
-before and after this change (905 lines, 2 status events either way).
+`--loop` is off by default, so any plain `replay_performance.py`
+invocation is byte-for-byte unaffected — confirmed by diffing a
+`--speed 1000 --no-sleep` capture before and after this change
+(905 lines, 2 status events either way).
 
-Neither script touches `run_performance_live.sh` / `run_performance_demo.sh`,
-and the live/demo virtual port is always `H10 Continuous Body Field`, never
-`H10 Performance V4`.
+The live/demo virtual port is always `H10 Continuous Body Field`, never
+`H10 Performance V4`. (The V4 rig itself was archived on 2026-07-15; see
+the `archive-pre-continuous-cleanup` tag.)
 
 ## Tests
 
