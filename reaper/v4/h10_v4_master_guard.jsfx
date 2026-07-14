@@ -13,15 +13,20 @@ out_pin:right output
 prev_inL = prev_inR = 0;
 prev_outL = prev_outR = 0;
 
+// EEL2 has no tanh builtin (a bare tanh() call silently breaks the whole
+// section and the guard passes audio through unprocessed) -- use the
+// classic exp identity instead.
+function soft_tanh(x) ( 1 - 2 / (exp(2 * x) + 1) );
+
 @slider
 drive = slider1;
 ceiling = exp(log(10) * slider2 / 20);
-normalizer = tanh(drive);
+normalizer = soft_tanh(drive);
 
 @sample
 dcL = spl0 - prev_inL + 0.995 * prev_outL;
 dcR = spl1 - prev_inR + 0.995 * prev_outR;
 prev_inL = spl0; prev_inR = spl1;
 prev_outL = dcL; prev_outR = dcR;
-spl0 = tanh(dcL * drive) / normalizer * ceiling;
-spl1 = tanh(dcR * drive) / normalizer * ceiling;
+spl0 = soft_tanh(dcL * drive) / normalizer * ceiling;
+spl1 = soft_tanh(dcR * drive) / normalizer * ceiling;
