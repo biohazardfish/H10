@@ -1,0 +1,130 @@
+desc:H10 Continuous Body
+tags:H10 continuous posture harmony (slow breathing warm middle layer)
+
+// BODY = slow breathing harmony: a warm middle-frequency cushion that
+// opens and closes gradually. No fragmentation, no rhythmic gating, no
+// bright revoicing, no melodic events. Four near-mono detuned sine voices
+// on D/A/E/G material; verticality glides the register over ~12 seconds,
+// stillness lengthens the sustain floor, motion gently thins the layer,
+// RMSSD (regulation) crossfades one subtle interval colour (E vs G), and
+// fluidity only smooths how fast level changes settle. At any moment only
+// one musical property is really moving.
+//
+// MiniLab (ch2): CC30 = BODY fader. No other macros.
+
+slider1:0.34<0,1,0.01>Base level
+
+in_pin:none
+out_pin:left
+out_pin:right
+
+@init
+regulation = 0.5;
+uprightness = 0;
+fluidity = 0.5;
+motion = 0;
+stillness = 1;
+performance_gate = 0;
+gate = 0;
+fader_level = 1.0;
+idle_samples = 1000000000;
+
+vpos = 0;           // slewed register position (~12 s glide)
+colour = 0;         // slewed interval colour (~8 s)
+thin = 0;           // slewed activity thinning
+breath = 0;
+ph0 = 0; ph1 = 0; ph2 = 0; ph3 = 0;
+phd0 = 0; phd1 = 0; phd2 = 0; phd3 = 0;
+lpL = 0; lpR = 0;
+hpL = 0; hpR = 0;
+level_slew = 0;
+
+function pitch_hz(m) ( 440 * 2 ^ ((m - 69) / 12) );
+
+@slider
+base_level = slider1;
+
+@block
+while (midirecv(offset, msg1, msg23)) (
+  status = msg1 & $xF0;
+  chan = msg1 & $x0F;
+  data1 = msg23 & $xFF;
+  data2 = (msg23 / 256) & $xFF;
+  (chan == 0 || chan == 9) ? idle_samples = 0;
+
+  status == $xB0 && chan == 0 && data1 == 11 ? regulation = data2 / 127;
+  status == $xB0 && chan == 0 && data1 == 12 ? motion = data2 / 127;
+  status == $xB0 && chan == 0 && data1 == 13 ? uprightness = data2 / 127;
+  status == $xB0 && chan == 0 && data1 == 15 ? fluidity = data2 / 127;
+  status == $xB0 && chan == 0 && data1 == 17 ? stillness = data2 / 127;
+  status == $xB0 && chan == 0 && data1 == 119 ? performance_gate = data2 / 127;
+  status == $xB0 && chan == 1 && data1 == 30 ? fader_level = data2 / 127;
+
+  midisend(offset, msg1, msg23);
+);
+
+// fluidity smooths the envelope: fluid = slow settling, jerky = a bit faster
+level_slew_coef = 1 / ((1.5 + fluidity * 3.5) * srate);
+
+@sample
+idle_samples += 1;
+idle_samples > srate * 3 ? performance_gate = 0;
+gate += (performance_gate - gate) * (performance_gate > gate ? 0.00045 : 0.00007);
+
+// slow glides: register ~12 s, colour ~8 s, thinning ~4 s
+vpos += (uprightness - vpos) / (12 * srate);
+colour += ((1 - regulation) - colour) / (8 * srate);
+thin += (motion - thin) / (4 * srate);
+
+// voices: D3->D4 glide, A3 anchor, E3 colour a, G3 colour b
+m0 = 50 + vpos * 12;   // D3 -> D4
+f0 = pitch_hz(m0);
+f1 = pitch_hz(57);     // A3
+f2 = pitch_hz(52 + vpos * 7);  // E3 -> B3-ish upper neighbour, stays midrange
+f3 = pitch_hz(55);     // G3
+
+detune = 1.0014;
+ph0 += 2*$pi*f0/srate;          ph0 > 2*$pi ? ph0 -= 2*$pi;
+ph1 += 2*$pi*f1/srate;          ph1 > 2*$pi ? ph1 -= 2*$pi;
+ph2 += 2*$pi*f2/srate;          ph2 > 2*$pi ? ph2 -= 2*$pi;
+ph3 += 2*$pi*f3/srate;          ph3 > 2*$pi ? ph3 -= 2*$pi;
+phd0 += 2*$pi*f0*detune/srate;  phd0 > 2*$pi ? phd0 -= 2*$pi;
+phd1 += 2*$pi*f1*detune/srate;  phd1 > 2*$pi ? phd1 -= 2*$pi;
+phd2 += 2*$pi*f2*detune/srate;  phd2 > 2*$pi ? phd2 -= 2*$pi;
+phd3 += 2*$pi*f3*detune/srate;  phd3 > 2*$pi ? phd3 -= 2*$pi;
+
+// one subtle interval colour at a time: E-voice vs G-voice crossfade
+w0 = 0.34;
+w1 = 0.22;
+w2 = 0.14 * (1 - colour) * (0.4 + vpos * 0.6);
+w3 = 0.14 * colour;
+
+s0 = (sin(ph0) + sin(phd0)) * 0.5 * w0;
+s1 = (sin(ph1) + sin(phd1)) * 0.5 * w1;
+s2 = (sin(ph2) + sin(phd2)) * 0.5 * w2;
+s3 = (sin(ph3) + sin(phd3)) * 0.5 * w3;
+
+// near-mono: only the gentlest fixed offsets
+rawL = s0 + s1 * 1.04 + s2 * 0.97 + s3 * 1.02;
+rawR = s0 + s1 * 0.96 + s2 * 1.03 + s3 * 0.98;
+
+// dark, fixed rounding -- register separates BODY from EARTH, not brightness
+lpL += 0.030 * (rawL - lpL);
+lpR += 0.030 * (rawR - lpR);
+
+// high-pass ~140 Hz keeps BODY off EARTH's floor
+hp_k = 140 / srate * 2 * $pi;
+hpL += hp_k * (lpL - hpL);
+hpR += hp_k * (lpR - hpR);
+
+// breathing: one slow swell; stillness raises the sustain floor,
+// activity thins the cushion instead of fragmenting it
+breath += 2 * $pi * 0.06 / srate; breath > 2*$pi ? breath -= 2*$pi;
+swell = 1 - (0.08 + (1 - stillness) * 0.06) * (0.5 + 0.5 * sin(breath));
+level_target = base_level * fader_level * swell
+             * (0.55 + stillness * 0.30)
+             * (1 - thin * 0.22);
+level_slew += (level_target - level_slew) * level_slew_coef;
+
+spl0 = (lpL - hpL) * level_slew * gate;
+spl1 = (lpR - hpR) * level_slew * gate;

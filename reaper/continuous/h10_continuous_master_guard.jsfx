@@ -1,0 +1,32 @@
+desc:H10 Continuous Master Guard
+tags:H10 continuous dc blocker soft limiter
+
+slider1:1.15<0.5,2,0.01>Soft drive
+slider2:-1<-6,0,0.1>Ceiling (dB)
+
+in_pin:left input
+in_pin:right input
+out_pin:left output
+out_pin:right output
+
+@init
+prev_inL = prev_inR = 0;
+prev_outL = prev_outR = 0;
+
+// EEL2 has no tanh builtin (a bare tanh() call silently breaks the whole
+// section and the guard passes audio through unprocessed) -- use the
+// classic exp identity instead.
+function soft_tanh(x) ( 1 - 2 / (exp(2 * x) + 1) );
+
+@slider
+drive = slider1;
+ceiling = exp(log(10) * slider2 / 20);
+normalizer = soft_tanh(drive);
+
+@sample
+dcL = spl0 - prev_inL + 0.995 * prev_outL;
+dcR = spl1 - prev_inR + 0.995 * prev_outR;
+prev_inL = spl0; prev_inR = spl1;
+prev_outL = dcL; prev_outR = dcR;
+spl0 = soft_tanh(dcL * drive) / normalizer * ceiling;
+spl1 = soft_tanh(dcR * drive) / normalizer * ceiling;

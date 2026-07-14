@@ -1,0 +1,309 @@
+desc:H10 Continuous Melody Voice
+tags:H10 continuous melody instrument (soft electric-piano / felted hybrid, manual playing only)
+
+// MELODY VOICE = the foreground human gesture: a warm, soft, sustained
+// instrument somewhere between a muted electric piano, a felted keyboard
+// and a breathy reed. No mallet strike, no noise burst, no high partials,
+// no bell/FM character -- the note is a rounded low-mid body (detuned
+// fundamental pair + gentle 2nd/3rd harmonics) with a soft felt bump at
+// the onset, shaped by a full knob-controlled ADSR and closed by a dark
+// lowpass whose ceiling is hard-capped so the tone can move from dark to
+// moderately open but never to piercing.
+//
+// Strictly performer-driven: no arpeggiator, sequencer, automatic
+// notes/chords, scale filter or quantiser anywhere in this file. Chromatic
+// 12-TET; the played note sounds as that note.
+//
+// MIDI contract:
+//   ch2 (chan==1)  keyboard notes, pitch bend +/-12 st, CC64 sustain,
+//                  CC1 small bounded brightness assist, and the eight
+//                  Melody knobs + Melody fader:
+//                    CC20 Attack   CC21 Decay    CC22 Sustain  CC23 Release
+//                    CC24 Tone     CC25 Warmth   CC26 Space    CC27 H10 influence
+//                    CC28 MELODY VOICE fader
+//   ch1 (chan==0)  H10 tint CCs via the H10 CONTROL send (CC10 arousal,
+//                  CC11 regulation). Tint depth is set by CC27; even at
+//                  maximum it only breathes tone/warmth a little and can
+//                  never alter pitch, timing, duration, or note count.
+//   CC123 on any channel (bridge panic / shutdown) -> clear every voice,
+//   including pedal-sustained ones, with a fast clickless fade.
+
+slider1:0.9<0,1.5,0.01>Output level
+
+in_pin:none
+out_pin:left
+out_pin:right
+
+@init
+NVOICES = 8;
+VSTRIDE = 32;
+V_STATE = 0;   // 0 free, 1 held, 2 pedal-held, 3 releasing
+V_STAGE = 1;   // 0 attack, 1 decay/sustain
+V_NOTE = 2;
+V_FREQ = 3;
+V_VEL = 4;
+V_ENV = 5;
+V_PA = 6;      // fundamental
+V_PB = 7;      // detuned partner
+V_P2 = 8;      // 2nd harmonic
+V_P3 = 9;      // 3rd harmonic
+V_FELT = 10;   // soft onset bump envelope
+V_LP = 11;
+V_KILL = 12;
+
+// knob state: -1 = untouched, use the musical default
+k_attack = -1; k_decay = -1; k_sustain = -1; k_release = -1;
+k_tone = -1; k_warmth = -1; k_space = -1; k_infl = -1;
+cc1_assist = 0;
+fader_level = 1.0;
+
+pedal = 0;
+bend_semi = 0;
+bend_target = 0;
+tint_arousal = 0.3;
+tint_regulation = 0.5;
+det_lfo = 0;
+
+AMB0 = 100000; AMB1 = 110000;
+amb_len0 = floor(srate * 0.0231);
+amb_len1 = floor(srate * 0.0317);
+amb_idx0 = 0; amb_idx1 = 0;
+amb_lp0 = 0; amb_lp1 = 0;
+amb_dark_l = 0; amb_dark_r = 0;
+hp_l = 0; hp_r = 0;
+
+function note_freq(n) ( 440 * 2 ^ ((n - 69) / 12) );
+
+// EEL2 has no tanh builtin; classic identity via exp
+function soft_tanh(x) ( 1 - 2 / (exp(2 * x) + 1) );
+
+function voice_start(v, note, vel) local(base) (
+  base = v * VSTRIDE;
+  base[V_STATE] = 1;
+  base[V_STAGE] = 0;
+  base[V_NOTE] = note;
+  base[V_FREQ] = note_freq(note);
+  base[V_VEL] = vel;
+  // retriggered voices keep their current env so repeated notes stay soft
+  base[V_FELT] = 1;
+  base[V_LP] = 0;
+  base[V_KILL] = 0;
+);
+
+function find_voice(note) local(v, base, best, best_env, level) (
+  best = -1; v = 0;
+  while (v < NVOICES && best == -1) (
+    base = v * VSTRIDE;
+    (base[V_STATE] > 0 && base[V_NOTE] == note) ? best = v;
+    v += 1;
+  );
+  best == -1 ? (
+    v = 0;
+    while (v < NVOICES && best == -1) (
+      (v * VSTRIDE)[V_STATE] == 0 ? best = v;
+      v += 1;
+    );
+  );
+  best == -1 ? (
+    best_env = 10; v = 0;
+    while (v < NVOICES) (
+      base = v * VSTRIDE;
+      level = base[V_ENV] + (base[V_STATE] == 3 ? 0 : 1);
+      level < best_env ? ( best_env = level; best = v; );
+      v += 1;
+    );
+  );
+  best;
+);
+
+function all_notes_off() local(v, base) (
+  v = 0;
+  while (v < NVOICES) (
+    base = v * VSTRIDE;
+    base[V_STATE] > 0 ? base[V_KILL] = 1;
+    v += 1;
+  );
+  pedal = 0;
+);
+
+@slider
+out_level = slider1;
+
+@block
+while (midirecv(offset, msg1, msg23)) (
+  status = msg1 & $xF0;
+  chan = msg1 & $x0F;
+  data1 = msg23 & $xFF;
+  data2 = (msg23 / 256) & $xFF;
+
+  chan == 1 ? (
+    (status == $x90 && data2 > 0) ? (
+      v = find_voice(data1);
+      voice_start(v, data1, data2 / 127);
+    ) :
+    (status == $x80 || (status == $x90 && data2 == 0)) ? (
+      vv = 0;
+      while (vv < NVOICES) (
+        base = vv * VSTRIDE;
+        (base[V_STATE] == 1 && base[V_NOTE] == data1) ? (
+          base[V_STATE] = pedal ? 2 : 3;
+        );
+        vv += 1;
+      );
+    ) :
+    (status == $xE0) ? (
+      // 14-bit bend -> +/-12 semitones, unquantised
+      bend_target = (data1 + data2 * 128 - 8192) / 8192 * 12;
+    ) :
+    (status == $xB0) ? (
+      data1 == 1 ? cc1_assist = data2 / 127;
+      data1 == 20 ? k_attack = data2 / 127;
+      data1 == 21 ? k_decay = data2 / 127;
+      data1 == 22 ? k_sustain = data2 / 127;
+      data1 == 23 ? k_release = data2 / 127;
+      data1 == 24 ? k_tone = data2 / 127;
+      data1 == 25 ? k_warmth = data2 / 127;
+      data1 == 26 ? k_space = data2 / 127;
+      data1 == 27 ? k_infl = data2 / 127;
+      data1 == 28 ? fader_level = data2 / 127;
+      data1 == 64 ? (
+        data2 >= 64 ? pedal = 1 : (
+          pedal = 0;
+          vv = 0;
+          while (vv < NVOICES) (
+            base = vv * VSTRIDE;
+            base[V_STATE] == 2 ? base[V_STATE] = 3;
+            vv += 1;
+          );
+        );
+      );
+    );
+  );
+
+  (chan == 0 && status == $xB0) ? (
+    data1 == 10 ? tint_arousal = data2 / 127;
+    data1 == 11 ? tint_regulation = data2 / 127;
+  );
+
+  (status == $xB0 && data1 == 123) ? all_notes_off();
+
+  midisend(offset, msg1, msg23);
+);
+
+// knob values (musical defaults when untouched)
+attack_k = k_attack >= 0 ? k_attack : 0.12;
+decay_k = k_decay >= 0 ? k_decay : 0.42;
+sustain_k = k_sustain >= 0 ? k_sustain : 0.55;
+release_k = k_release >= 0 ? k_release : 0.32;
+tone_k = k_tone >= 0 ? k_tone : 0.45;
+warmth_k = k_warmth >= 0 ? k_warmth : 0.60;
+space_k = k_space >= 0 ? k_space : 0.35;
+infl_k = k_infl >= 0 ? k_infl : 0.30;
+
+// bounded ranges: soft-immediate .. slow swell, no clicks anywhere
+attack_s = 0.004 + attack_k * attack_k * 0.80;
+decay_s = 0.08 + decay_k ^ 1.5 * 2.4;
+release_s = 0.08 + release_k ^ 1.6 * 2.9;
+a_coef = 1 - exp(-1 / (attack_s * srate));
+d_coef = 1 - exp(-1 / (decay_s * srate));
+r_coef = 1 - exp(-1 / (release_s * srate));
+
+// H10 influence: bounded tonal breathing only
+tint_bright = (tint_arousal - 0.3) * 0.10 * infl_k;         // <= +/-0.07
+tint_warm = (tint_regulation - 0.5) * 0.10 * infl_k;        // <= +/-0.05
+
+// tone: dark .. moderately open; CC1 gives a small bounded assist
+tone_eff = min(1, max(0, tone_k + cc1_assist * 0.15 + tint_bright));
+warmth_eff = min(1, max(0, warmth_k + tint_warm));
+
+// harmonic recipe: mostly fundamental, gentle low-order harmonics
+h2_amp = 0.20 * (1 - warmth_eff * 0.45) + tone_eff * 0.06;
+h3_amp = tone_eff * 0.09 * (1 - warmth_eff * 0.55);
+fund_amp = 0.92 + warmth_eff * 0.16;
+amb_wet = space_k * 0.35;
+
+@sample
+bend_semi += (bend_target - bend_semi) * 0.0015;
+bend_mult = 2 ^ (bend_semi / 12);
+
+// slow shared chorus movement (~0.35 Hz) -- mild detune, warm not wobbly
+det_lfo += 2 * $pi * 0.35 / srate;
+det_lfo > 2*$pi ? det_lfo -= 2*$pi;
+detune = 1.0015 + sin(det_lfo) * 0.0005;
+
+out_l = 0; out_r = 0;
+v = 0;
+while (v < NVOICES) (
+  base = v * VSTRIDE;
+  base[V_STATE] > 0 ? (
+    vel = base[V_VEL];
+    freq = base[V_FREQ] * bend_mult;
+
+    // ADSR: attack -> decay-to-sustain -> (release on key/pedal up)
+    base[V_STATE] == 3 ? (
+      base[V_ENV] += (0 - base[V_ENV]) * r_coef;
+    ) : base[V_STAGE] == 0 ? (
+      base[V_ENV] += (1.06 - base[V_ENV]) * a_coef * (0.85 + vel * 0.35);
+      base[V_ENV] >= 1 ? ( base[V_ENV] = 1; base[V_STAGE] = 1; );
+    ) : (
+      base[V_ENV] += (sustain_k - base[V_ENV]) * d_coef;
+    );
+    base[V_KILL] ? base[V_ENV] *= 0.9975;  // ~9 ms panic fade
+
+    base[V_FELT] *= exp(-1 / (0.045 * srate));
+
+    w = 2 * $pi * freq / srate;
+    base[V_PA] += w;            base[V_PA] > 2*$pi ? base[V_PA] -= 2*$pi;
+    base[V_PB] += w * detune;   base[V_PB] > 2*$pi ? base[V_PB] -= 2*$pi;
+    base[V_P2] += w * 2.0;      base[V_P2] > 2*$pi ? base[V_P2] -= 2*$pi;
+    base[V_P3] += w * 3.0;      base[V_P3] > 2*$pi ? base[V_P3] -= 2*$pi;
+
+    fund = (sin(base[V_PA]) + sin(base[V_PB])) * 0.5;
+    tone = fund * fund_amp
+         + sin(base[V_P2]) * h2_amp
+         + sin(base[V_P3]) * h3_amp
+         + fund * base[V_FELT] * 0.22;   // soft felt bump, no noise
+
+    // dark per-voice lowpass: 1.2*f0 .. ~6*f0, hard-capped at 4200 Hz
+    cut = min(4200, freq * (1.2 + (tone_eff + vel * 0.10) * 4.8) * (1 - warmth_eff * 0.20));
+    lp_coef = min(0.45, cut / srate * 2 * $pi);
+    base[V_LP] += lp_coef * (tone * base[V_ENV] - base[V_LP]);
+
+    level = (0.35 + 0.65 * vel ^ 1.2) * 0.42;
+    voice_out = base[V_LP] * level;
+    pan = 0.5 + ((base[V_NOTE] - 60) / 60) * 0.12;
+    out_l += voice_out * sqrt(1 - pan);
+    out_r += voice_out * sqrt(pan);
+
+    (base[V_ENV] < 0.0005 && (base[V_STATE] == 3 || base[V_KILL])) ? (
+      base[V_STATE] = 0; base[V_KILL] = 0;
+    );
+  );
+  v += 1;
+);
+
+// short dark ambience: damped taps, then darkened again before mixing
+amb_in_l = out_l * amb_wet;
+amb_in_r = out_r * amb_wet;
+t0 = AMB0[amb_idx0]; t1 = AMB1[amb_idx1];
+amb_lp0 += 0.15 * (t0 - amb_lp0);
+amb_lp1 += 0.15 * (t1 - amb_lp1);
+AMB0[amb_idx0] = amb_in_l + amb_lp1 * 0.32;
+AMB1[amb_idx1] = amb_in_r + amb_lp0 * 0.34;
+amb_idx0 += 1; amb_idx0 >= amb_len0 ? amb_idx0 = 0;
+amb_idx1 += 1; amb_idx1 >= amb_len1 ? amb_idx1 = 0;
+amb_dark_l += 0.10 * (t0 - amb_dark_l);
+amb_dark_r += 0.10 * (t1 - amb_dark_r);
+
+sig_l = out_l + amb_dark_l * 0.9;
+sig_r = out_r + amb_dark_r * 0.9;
+
+// keep lows off EARTH's floor (~70 Hz one-pole HP)
+hp_k = 70 / srate * 2 * $pi;
+hp_l += hp_k * (sig_l - hp_l);
+hp_r += hp_k * (sig_r - hp_r);
+sig_l -= hp_l; sig_r -= hp_r;
+
+// gentle safety saturation
+spl0 = soft_tanh(sig_l * out_level * fader_level);
+spl1 = soft_tanh(sig_r * out_level * fader_level);

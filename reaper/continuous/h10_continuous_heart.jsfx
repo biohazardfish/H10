@@ -1,0 +1,91 @@
+desc:H10 Continuous Heart
+tags:H10 continuous heartbeat pulse (soft muted internal thump, no bright transient)
+
+// HEART = a soft pulse: body pressure, a muted internal thump. It is
+// identifiable through timing and envelope, never through brightness.
+// Two rounded components only:
+//   - low body around 64 Hz (soft ~7 ms attack, ~150 ms decay, no sustain)
+//   - a quiet low-mid pressure bloom around 170 Hz that decays faster
+// Everything passes through a dark one-pole lowpass; there is no noise
+// burst, no bandpass knock, no high transient layer. Activity/arousal only
+// changes firmness subtly -- never brightness, never extra layers.
+//
+// HEART deliberately has NO MiniLab fader: its level is fixed in a safe
+// range so it can never dominate the mix.
+
+slider1:0.25<0,0.8,0.01>Base level
+
+in_pin:none
+out_pin:left
+out_pin:right
+
+@init
+arousal = 0;
+performance_gate = 0;
+gate = 0;
+body_env = 0;
+body_target = 0;
+mid_env = 0;
+mid_target = 0;
+body_phase = 0;
+mid_phase = 0;
+vel = 0.6;
+out_lp = 0;
+idle_samples = 1000000000;
+
+@slider
+base_level = slider1;
+
+@block
+while (midirecv(offset, msg1, msg23)) (
+  status = msg1 & $xF0;
+  chan = msg1 & $x0F;
+  data1 = msg23 & $xFF;
+  data2 = (msg23 / 256) & $xFF;
+  (chan == 0 || chan == 9) ? idle_samples = 0;
+
+  status == $xB0 && chan == 0 && data1 == 10 ? arousal = data2 / 127;
+  status == $xB0 && chan == 0 && data1 == 119 ? performance_gate = data2 / 127;
+
+  status == $x90 && chan == 9 && data1 == 36 && data2 > 0 ? (
+    vel = min(1, max(0, (data2 - 42) / 30));
+    body_target = 0.62 + vel * 0.38;
+    mid_target = 0.30 + vel * 0.20;
+    body_env = 0;
+    mid_env = 0;
+    body_phase = 0;
+    mid_phase = 0;
+  );
+  midisend(offset, msg1, msg23);
+);
+
+// soft attack (~7 ms), rounded decay; arousal firms the pulse only subtly
+attack_coef = exp(-1 / (0.007 * srate));
+body_decay = exp(-1 / ((0.150 - arousal * 0.030) * srate));
+mid_decay = exp(-1 / (0.070 * srate));
+firmness = 1 + arousal * 0.12;
+
+@sample
+idle_samples += 1;
+idle_samples > srate * 3 ? performance_gate = 0;
+gate += (performance_gate - gate) * (performance_gate > gate ? 0.0012 : 0.00012);
+
+body_env = body_target + (body_env - body_target) * attack_coef;
+mid_env = mid_target + (mid_env - mid_target) * attack_coef;
+body_target *= body_decay;
+mid_target *= mid_decay;
+
+body_phase += 2 * $pi * 64 / srate;
+body_phase > 2 * $pi ? body_phase -= 2 * $pi;
+mid_phase += 2 * $pi * 170 / srate;
+mid_phase > 2 * $pi ? mid_phase -= 2 * $pi;
+
+raw = sin(body_phase) * body_env * 0.80
+    + sin(mid_phase) * mid_env * 0.26;
+
+// dark rounding: one-pole lowpass around ~300 Hz keeps every edge soft
+out_lp += 0.038 * (raw - out_lp);
+
+out = out_lp * base_level * firmness * gate;
+spl0 = out;
+spl1 = out * 0.99;

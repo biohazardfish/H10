@@ -27,6 +27,14 @@ PHASES = (
     ("sitting_return", 10.0),
     ("lying_final", 15.0),
 )
+TOTAL_DURATION = sum(duration for _name, duration in PHASES)
+
+# Gap (in virtual seconds) inserted between --loop cycles so the downstream
+# bridge's own dropout logic (all_lost_gate_seconds, currently 3.0 in both
+# performance_mapping.json and continuous_mapping.json) has time to close
+# the performance gate before the next cycle reconnects. Keep this above
+# that threshold with margin.
+LOOP_GAP_SECONDS = 4.0
 
 
 def unit(values: tuple[float, float, float]) -> tuple[float, float, float]:
@@ -237,22 +245,83 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Replay the H10 V4 five-scene performance.")
     parser.add_argument("--speed", type=float, default=2.0)
     parser.add_argument("--no-sleep", action="store_true")
+    parser.add_argument(
+        "--loop",
+        action="store_true",
+        help=(
+            "repeat the replay indefinitely instead of exiting after one cycle, "
+            "so a piped-in bridge (and its virtual MIDI port) stays alive for "
+            "REAPER setup and auditioning; stop with Ctrl+C"
+        ),
+    )
     return parser.parse_args()
+
+
+def _emit(event: dict[str, Any], due_at: float, no_sleep: bool) -> None:
+    if not no_sleep:
+        remaining = due_at - time.monotonic()
+        if remaining > 0:
+            time.sleep(remaining)
+    print(json.dumps(event, ensure_ascii=False, separators=(",", ":")), flush=True)
+
+
+def run_single_cycle(base_time: float, speed: float, no_sleep: bool) -> None:
+    """Original, unchanged single-pass behaviour used when --loop is absent.
+
+    base_time doubles as both the event-timestamp anchor and the scheduling
+    anchor -- one time.monotonic() reading, exactly as the pre-`--loop` code
+    took a single `started = time.monotonic()` and reused it for both.
+    """
+    for virtual_time, event in build_events(base_time):
+        _emit(event, base_time + virtual_time / speed, no_sleep)
 
 
 def main() -> int:
     args = parse_args()
     speed = max(0.1, args.speed)
-    started = time.monotonic()
-    base_time = started
-    for virtual_time, event in build_events(base_time):
-        if not args.no_sleep:
-            due = started + virtual_time / speed
-            remaining = due - time.monotonic()
-            if remaining > 0:
-                time.sleep(remaining)
-        print(json.dumps(event, ensure_ascii=False, separators=(",", ":")), flush=True)
-    return 0
+
+    if not args.loop:
+        # Exact original behaviour: one cycle, then exit. V4's demo script
+        # relies on this, so it must stay byte-for-byte identical.
+        run_single_cycle(time.monotonic(), speed, args.no_sleep)
+        return 0
+
+    cycle_span = TOTAL_DURATION + 0.2 + LOOP_GAP_SECONDS
+    cycle = 0
+    # Anchor virtual timestamps to the same clock domain the bridge's idle
+    # tick uses (time.monotonic()). With a 0-based anchor the bridge clamps
+    # its clock to wall-monotonic on the first idle tick, every replayed
+    # event then looks hundreds of thousands of seconds stale, and the
+    # dropout logic fades the gate ~3s in and never restores it.
+    loop_started = time.monotonic()
+    try:
+        while True:
+            base_time = loop_started + cycle * cycle_span
+            cycle_started = time.monotonic()
+            for virtual_time, event in build_events(base_time):
+                _emit(event, cycle_started + virtual_time / speed, args.no_sleep)
+
+            # Reaffirm "still disconnected" LOOP_GAP_SECONDS after the cycle's
+            # own final disconnect event (already emitted by build_events).
+            # That gap is what lets the bridge's own 3-second dropout timer
+            # safely lower the gate -- no process kill, no port teardown --
+            # before the next cycle's reconnect event reopens it.
+            gap_virtual_time = TOTAL_DURATION + 0.2 + LOOP_GAP_SECONDS
+            _emit(
+                {
+                    "kind": "status",
+                    "t_monotonic_s": base_time + gap_virtual_time,
+                    "timestamp": dt.datetime.now().astimezone().isoformat(timespec="milliseconds"),
+                    "connected": False,
+                    "heart_available": False,
+                    "motion_available": False,
+                },
+                cycle_started + gap_virtual_time / speed,
+                args.no_sleep,
+            )
+            cycle += 1
+    except (KeyboardInterrupt, BrokenPipeError):
+        return 0
 
 
 if __name__ == "__main__":

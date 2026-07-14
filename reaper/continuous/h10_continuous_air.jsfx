@@ -1,0 +1,80 @@
+desc:H10 Continuous Air
+tags:H10 continuous air veil (low-level atmospheric support, not a featured layer)
+
+// AIR = breath / distant air movement, at the edge of perception. It is no
+// longer a featured layer: no grains, no whistle tone, no bright events,
+// no fast panning. A single dark pink-noise veil whose level follows
+// overall activity slowly, with broad, shallow stereo drift. If individual
+// AIR events are noticeable, AIR is too loud -- there are deliberately no
+// events to notice.
+//
+// MiniLab (ch2): CC31 = AIR/SPACE fader. No other macros.
+
+slider1:0.09<0,0.5,0.005>Base level
+
+in_pin:none
+out_pin:left
+out_pin:right
+
+@init
+motion = 0;
+fluidity = 0.5;
+rotation = 0;
+performance_gate = 0;
+gate = 0;
+bed = 0;            // slewed level of the veil
+pink = 0;
+low = 0;
+dark1 = 0; dark2 = 0;
+orbit = 0;
+fader_level = 1.0;
+idle_samples = 1000000000;
+
+@slider
+base_level = slider1;
+
+@block
+while (midirecv(offset, msg1, msg23)) (
+  status = msg1 & $xF0;
+  chan = msg1 & $x0F;
+  data1 = msg23 & $xFF;
+  data2 = (msg23 / 256) & $xFF;
+  (chan == 0 || chan == 9) ? idle_samples = 0;
+  status == $xB0 && chan == 0 && data1 == 12 ? motion = data2 / 127;
+  status == $xB0 && chan == 0 && data1 == 15 ? fluidity = data2 / 127;
+  status == $xB0 && chan == 0 && data1 == 16 ? rotation = data2 / 127;
+  status == $xB0 && chan == 0 && data1 == 119 ? performance_gate = data2 / 127;
+  status == $xB0 && chan == 1 && data1 == 31 ? fader_level = data2 / 127;
+  midisend(offset, msg1, msg23);
+);
+
+// slow slew targets: attack ~2.5 s, release ~5 s -- nothing ever jumps
+bed_target = min(1, motion * 1.2);
+bed_attack = 1 / (2.5 * srate);
+bed_release = 1 / (5.0 * srate);
+
+@sample
+idle_samples += 1;
+idle_samples > srate * 3 ? performance_gate = 0;
+gate += (performance_gate - gate) * (performance_gate > gate ? 0.0004 : 0.00008);
+
+bed += (bed_target - bed) * (bed_target > bed ? bed_attack : bed_release);
+
+// dark pink-ish veil: pink integrator then two more darkening poles
+noise = rand(2) - 1;
+pink += 0.010 * (noise - pink);
+low += 0.008 * (pink - low);
+veil = pink - low * 0.6;
+dark1 += 0.045 * (veil - dark1);
+dark2 += 0.045 * (dark1 - dark2);
+
+// broad, slow stereo drift; rotation only eases the drift a little wider
+orbit += 2 * $pi * (0.018 + rotation * 0.03) / srate;
+orbit > 2*$pi ? orbit -= 2*$pi;
+pan = sin(orbit) * (0.12 + rotation * 0.14);
+left_gain = sqrt(max(0, (1 - pan) * 0.5));
+right_gain = sqrt(max(0, (1 + pan) * 0.5));
+
+level = base_level * fader_level * bed;
+spl0 = dark2 * left_gain * level * gate;
+spl1 = dark2 * right_gain * level * gate;

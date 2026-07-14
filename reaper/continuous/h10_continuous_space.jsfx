@@ -1,0 +1,91 @@
+desc:H10 Continuous Space
+tags:H10 continuous shared-room ambience (dark, restrained, unifying)
+
+// SPACE = glue. A mature, dark, restrained ambience that puts every layer
+// in one shared room: short-to-medium tail, heavy high-frequency damping,
+// high-passed input, minimal stereo movement. It never produces sound by
+// itself, never multiplies bright detail, and never becomes a subject.
+// The only body response kept is gentle: stillness lets the room ring a
+// little longer; rotation eases the stereo cross-feed slightly wider.
+// No destabilisation, no wobble, no activity-driven memory writing.
+//
+// MiniLab (ch2): CC31 = AIR/SPACE fader. No other macros.
+
+slider1:0.38<0,1,0.01>Return level
+slider2:0.42<0,1,0.01>Room size
+
+in_pin:left input
+in_pin:right input
+out_pin:left output
+out_pin:right output
+
+@init
+room = slider2;
+rotation = 0;
+stillness = 1;
+performance_gate = 0;
+gate = 0;
+maxdelay = max(8192, floor(srate * 3));
+bufL = 0;
+bufR = maxdelay + 16;
+write_pos = 0;
+in_lpL = in_lpR = 0;
+wet_lpL = wet_lpR = 0;
+wet2_L = wet2_R = 0;
+fader_level = 1.0;
+idle_samples = 1000000000;
+
+@slider
+return_level = slider1;
+room = slider2;
+
+@block
+while (midirecv(offset, msg1, msg23)) (
+  status = msg1 & $xF0;
+  chan = msg1 & $x0F;
+  data1 = msg23 & $xFF;
+  data2 = (msg23 / 256) & $xFF;
+  (chan == 0 || chan == 9) ? idle_samples = 0;
+  status == $xB0 && chan == 0 && data1 == 16 ? rotation = data2 / 127;
+  status == $xB0 && chan == 0 && data1 == 17 ? stillness = data2 / 127;
+  status == $xB0 && chan == 0 && data1 == 119 ? performance_gate = data2 / 127;
+  status == $xB0 && chan == 1 && data1 == 31 ? fader_level = data2 / 127;
+  midisend(offset, msg1, msg23);
+);
+
+@sample
+idle_samples += 1;
+idle_samples > srate * 3 ? performance_gate = 0;
+gate += (performance_gate - gate) * (performance_gate > gate ? 0.0004 : 0.000045);
+
+// high-pass the sends so low end never accumulates in the tail
+in_lpL += 0.015 * (spl0 - in_lpL);
+in_lpR += 0.015 * (spl1 - in_lpR);
+highL = spl0 - in_lpL;
+highR = spl1 - in_lpR;
+
+d1 = floor(srate * (0.14 + room * 0.30));
+d2 = floor(srate * (0.23 + room * 0.47));
+d3 = floor(srate * (0.34 + room * 0.66));
+r1 = (write_pos - d1 + maxdelay) % maxdelay;
+r2 = (write_pos - d2 + maxdelay) % maxdelay;
+r3 = (write_pos - d3 + maxdelay) % maxdelay;
+tapL = bufL[r1] * 0.52 + bufR[r2] * 0.31 + bufL[r3] * 0.17;
+tapR = bufR[r1] * 0.52 + bufL[r2] * 0.31 + bufR[r3] * 0.17;
+
+// short-to-medium retention; stillness lengthens it only gently
+feedback = 0.28 + stillness * 0.16;
+cross = 0.18 + rotation * 0.10;
+bufL[write_pos] = highL + (tapL * (1 - cross) + tapR * cross) * feedback;
+bufR[write_pos] = highR + (tapR * (1 - cross) + tapL * cross) * feedback;
+write_pos += 1;
+write_pos >= maxdelay ? write_pos = 0;
+
+// two damping stages: the room is dark, edges are softened, nothing sparkles
+wet_lpL += 0.020 * (tapL - wet_lpL);
+wet_lpR += 0.020 * (tapR - wet_lpR);
+wet2_L += 0.060 * (wet_lpL - wet2_L);
+wet2_R += 0.060 * (wet_lpR - wet2_R);
+
+spl0 = wet2_L * return_level * fader_level * gate;
+spl1 = wet2_R * return_level * fader_level * gate;

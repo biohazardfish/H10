@@ -1,0 +1,118 @@
+desc:H10 Continuous Earth
+tags:H10 continuous gravity drone (low D, mass and resistance, not harmony)
+
+// EARTH = weight / ground. One low D tonal centre (D2, 73.4 Hz), mostly
+// mono, subtle unstable harmonics with very slow spectral drift. It barely
+// reacts to direct motion; instead it relates to verticality, stillness and
+// an in-JSFX recovery estimate (slow-rising inverse of arousal). A is only
+// a secondary, drifting spectral component -- never a permanent equal open
+// fifth -- and everything above ~250 Hz is rolled off so the 200-500 Hz
+// band stays clear for BODY and MELODY.
+//
+// MiniLab (ch2): CC29 = EARTH fader. The old dark/bright, sparse/dense and
+// biosignal-depth macros were retired (knobs now belong to MELODY VOICE);
+// their former default values are pinned as constants so EARTH sounds
+// exactly as before. EARTH is the reference layer -- unchanged by design.
+
+slider1:0.36<0,1,0.01>Base level
+
+in_pin:none
+out_pin:left
+out_pin:right
+
+@init
+arousal = 0;
+uprightness = 0;
+stillness = 1;
+regulation = 0.5;
+performance_gate = 0;
+gate = 0;
+recovery = 1;
+p_root = 0; p_oct = 0; p_fifth = 0; p_unst1 = 0; p_unst2 = 0;
+drift1 = 0; drift2 = 0; drift3 = 0;
+lp1 = 0; lp2 = 0;
+knob_bright = 0.5;
+knob_dense = 0.5;
+fader_level = 1.0;
+bio_depth = 1.0;
+idle_samples = 1000000000;
+ROOT_HZ = 73.416;  // D2
+
+@slider
+base_level = slider1;
+
+@block
+while (midirecv(offset, msg1, msg23)) (
+  status = msg1 & $xF0;
+  chan = msg1 & $x0F;
+  data1 = msg23 & $xFF;
+  data2 = (msg23 / 256) & $xFF;
+  (chan == 0 || chan == 9) ? idle_samples = 0;
+
+  status == $xB0 && chan == 0 && data1 == 10 ? arousal = data2 / 127;
+  status == $xB0 && chan == 0 && data1 == 11 ? regulation = data2 / 127;
+  status == $xB0 && chan == 0 && data1 == 13 ? uprightness = data2 / 127;
+  status == $xB0 && chan == 0 && data1 == 17 ? stillness = data2 / 127;
+  status == $xB0 && chan == 0 && data1 == 119 ? performance_gate = data2 / 127;
+
+  status == $xB0 && chan == 1 && data1 == 29 ? fader_level = data2 / 127;
+
+  midisend(offset, msg1, msg23);
+);
+
+// biosignal depth: lerp each body signal toward its neutral value
+arousal_d = arousal * bio_depth;
+upright_d = uprightness * bio_depth;
+still_d = 1.0 + (stillness - 1.0) * bio_depth;
+reg_d = 0.5 + (regulation - 0.5) * bio_depth;
+
+@sample
+idle_samples += 1;
+idle_samples > srate * 3 ? performance_gate = 0;
+gate += (performance_gate - gate) * (performance_gate > gate ? 0.00055 : 0.00008);
+
+// recovery estimate: rises slowly (~20 s) when arousal is low, drops fast
+// (~3 s) when arousal spikes -- "body settled, heart not yet recovered".
+rec_target = 1 - arousal_d;
+rec_coef = rec_target > recovery ? 1 / (20 * srate) : 1 / (3 * srate);
+recovery += (rec_target - recovery) * rec_coef;
+
+// very slow spectral drift (periods ~45-110 s); low recovery = more unstable
+drift_speed = 1 + (1 - recovery) * 2.5;
+drift1 += 2 * $pi * 0.0091 * drift_speed / srate; drift1 > 2*$pi ? drift1 -= 2*$pi;
+drift2 += 2 * $pi * 0.0137 * drift_speed / srate; drift2 > 2*$pi ? drift2 -= 2*$pi;
+drift3 += 2 * $pi * 0.0219 * drift_speed / srate; drift3 > 2*$pi ? drift3 -= 2*$pi;
+drift_depth = 0.10 + (1 - recovery) * 0.14;
+
+// unstable harmonics: two near-coincident partials around 2.7x beat slowly
+detune = 0.0016 + (1 - reg_d) * 0.0024;
+p_root  += 2 * $pi * ROOT_HZ / srate;                    p_root  > 2*$pi ? p_root  -= 2*$pi;
+p_oct   += 2 * $pi * ROOT_HZ * 2.0 / srate;              p_oct   > 2*$pi ? p_oct   -= 2*$pi;
+p_fifth += 2 * $pi * ROOT_HZ * 1.5 / srate;              p_fifth > 2*$pi ? p_fifth -= 2*$pi;
+p_unst1 += 2 * $pi * ROOT_HZ * 2.696 / srate;            p_unst1 > 2*$pi ? p_unst1 -= 2*$pi;
+p_unst2 += 2 * $pi * ROOT_HZ * (2.696 + detune) / srate; p_unst2 > 2*$pi ? p_unst2 -= 2*$pi;
+
+// A (the 1.5x component) is secondary and drifting: never equal to the root
+fifth_amp = (0.16 + sin(drift1) * 0.08) * (0.6 + knob_dense * 0.6);
+oct_amp = (0.20 + sin(drift2) * drift_depth * 0.5) * (0.5 + knob_bright * 0.7);
+unstable_amp = (0.055 + (1 - recovery) * 0.05) * (0.4 + knob_dense * 0.9);
+
+raw = sin(p_root) * (0.62 + sin(drift3) * drift_depth * 0.25)
+    + sin(p_oct) * oct_amp
+    + sin(p_fifth) * fifth_amp
+    + (sin(p_unst1) + sin(p_unst2)) * unstable_amp * 0.5;
+
+// keep it floor-like: roll off above ~180-260 Hz depending on brightness
+coef = (0.019 + knob_bright * 0.014) * (1 - upright_d * 0.25);
+lp1 += coef * (raw - lp1);
+lp2 += coef * (lp1 - lp2);
+
+// gravity felt most when the body is low and still; standing thins the floor
+level = base_level * fader_level
+      * (0.72 + still_d * 0.28)
+      * (1 - upright_d * 0.30)
+      * (0.9 + recovery * 0.1);
+
+mono = lp2 * level * gate;
+spl0 = mono;
+spl1 = mono * 0.988 + lp1 * level * gate * 0.012;  // barely-there width

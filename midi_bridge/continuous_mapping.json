@@ -1,0 +1,69 @@
+{
+  "schema": "h10_continuous_v1",
+  "profile": "continuous_body_field",
+  "calibration": {
+    "stable_seconds": 10.0,
+    "max_motion_rms_mg": 150.0,
+    "default_baseline_bpm": 109.0,
+    "default_baseline_rr_ms": 553.0
+  },
+  "rr_filter": {
+    "min_ms": 270.0,
+    "max_ms": 2000.0,
+    "bpm_tolerance_fraction": 0.15,
+    "bpm_tolerance_min_ms": 40.0,
+    "rolling_median_fraction": 0.30,
+    "history_size": 20
+  },
+  "ranges": {
+    "arousal_delta_bpm": 30.0,
+    "rmssd_min_ms": 2.0,
+    "rmssd_max_ms": 12.0,
+    "motion_min_mg": 60.0,
+    "motion_max_mg": 600.0,
+    "upright_min_deg": 15.0,
+    "upright_max_deg": 75.0,
+    "rr_min_ms": 420.0,
+    "rr_max_ms": 620.0,
+    "fluidity_ratio_min": 6.0,
+    "fluidity_ratio_max": 26.0,
+    "rotation_min_deg_s": 4.0,
+    "rotation_max_deg_s": 35.0
+  },
+  "dropout": {
+    "heart_stale_seconds": 2.5,
+    "heart_arousal_release_seconds": 2.5,
+    "motion_stale_seconds": 1.5,
+    "all_lost_gate_seconds": 3.0
+  },
+  "midi": {
+    "channel": 1,
+    "heartbeat_channel": 10,
+    "heartbeat_note": 36,
+    "heartbeat_gate_ms": 120,
+    "performance_gate_cc": 119,
+    "max_cc_hz": 10.0,
+    "snapshot_keepalive_seconds": 1.0,
+    "signals": {
+      "arousal": 10,
+      "regulation": 11,
+      "motion": 12,
+      "uprightness": 13,
+      "pulse_gap": 14,
+      "fluidity": 15,
+      "rotation": 16,
+      "stillness": 17
+    }
+  },
+  "smoothing": {
+    "arousal": {"attack_seconds": 2.0, "release_seconds": 8.0},
+    "regulation": {"attack_seconds": 5.0, "release_seconds": 10.0},
+    "motion": {"attack_seconds": 0.2, "release_seconds": 2.5},
+    "uprightness": {"attack_seconds": 1.5, "release_seconds": 2.0},
+    "pulse_gap": {"attack_seconds": 0.8, "release_seconds": 1.5},
+    "fluidity": {"attack_seconds": 1.0, "release_seconds": 1.5},
+    "rotation": {"attack_seconds": 0.3, "release_seconds": 2.0},
+    "stillness": {"attack_seconds": 4.0, "release_seconds": 0.5},
+    "recovery": {"attack_seconds": 20.0, "release_seconds": 3.0}
+  }
+}
