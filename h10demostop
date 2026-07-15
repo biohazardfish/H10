@@ -1,0 +1,57 @@
+#!/bin/zsh
+set -euo pipefail
+
+ROOT="${0:A:h}"
+PID_FILE="${H10DEMOPLAY_PIDFILE:-/tmp/h10demoplay-${UID}.pid}"
+REAPER_PYTHON="${REAPER_MCP_PYTHON:-$HOME/Projects/reaper-mcp/.venv/bin/python}"
+
+stopped=0
+
+if [[ -r "$PID_FILE" ]]; then
+  pid="$(<"$PID_FILE")"
+  if [[ "$pid" == <-> ]] && kill -0 "$pid" 2>/dev/null; then
+    print -u2 "[h10demostop] stopping h10demoplay pid=$pid"
+    kill -TERM "$pid" 2>/dev/null || true
+    for _ in {1..40}; do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 0.1
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      print -u2 "[h10demostop] forcing unresponsive h10demoplay to exit"
+      kill -KILL "$pid" 2>/dev/null || true
+    fi
+    stopped=1
+  fi
+  rm -f "$PID_FILE"
+fi
+
+# Clean up an older bridge started before PID tracking was added.
+for pattern in \
+  "$ROOT/midi_bridge/examples/replay_performance.py" \
+  "$ROOT/midi_bridge/continuous_bridge.py"
+do
+  pids=("${(@f)$(pgrep -f -- "$pattern" 2>/dev/null || true)}")
+  for pid in "${pids[@]}"; do
+    [[ -n "$pid" ]] || continue
+    print -u2 "[h10demostop] stopping demo process pid=$pid"
+    kill -TERM "$pid" 2>/dev/null || true
+    stopped=1
+  done
+done
+
+if [[ -x "$REAPER_PYTHON" ]]; then
+  "$REAPER_PYTHON" - <<'PY'
+from reapy import reascript_api as RPR
+
+RPR.Main_OnCommand(1016, 0)   # Transport: Stop
+RPR.Main_OnCommand(40345, 0)  # Send all notes off to all MIDI outputs/plugins
+RPR.UpdateArrange()
+print("[h10demostop] REAPER stopped; MIDI panic sent")
+PY
+else
+  print -u2 "[h10demostop] REAPER control unavailable: $REAPER_PYTHON"
+fi
+
+if (( stopped == 0 )); then
+  print -u2 "[h10demostop] no demo bridge was running"
+fi

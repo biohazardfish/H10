@@ -1,0 +1,258 @@
+#!/bin/zsh
+set -euo pipefail
+
+ROOT="${0:A:h}"
+export H10DEMOPLAY_ROOT="$ROOT"
+export H10DEMOPLAY_H10_PYTHON="${H10_PYTHON:-$ROOT/venv/bin/python}"
+export H10DEMOPLAY_REAPER_PYTHON="${REAPER_MCP_PYTHON:-$HOME/Projects/reaper-mcp/.venv/bin/python}"
+export H10DEMOPLAY_SPEED="${CONTINUOUS_DEMO_SPEED:-2}"
+export H10DEMOPLAY_PIDFILE="${H10DEMOPLAY_PIDFILE:-/tmp/h10demoplay-${UID}.pid}"
+
+exec /usr/bin/env python3 - "$@" <<'PY'
+from __future__ import annotations
+
+import argparse
+import atexit
+import os
+import signal
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+
+ROOT = Path(os.environ["H10DEMOPLAY_ROOT"])
+H10_PYTHON = os.environ["H10DEMOPLAY_H10_PYTHON"]
+REAPER_PYTHON = os.environ["H10DEMOPLAY_REAPER_PYTHON"]
+SPEED = os.environ["H10DEMOPLAY_SPEED"]
+PID_FILE = Path(os.environ["H10DEMOPLAY_PIDFILE"])
+PORT = "H10 Continuous Body Field"
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="h10demoplay",
+        description="Play the H10 Continuous Body Field demo in REAPER.",
+    )
+    parser.add_argument(
+        "--once",
+        action="store_true",
+        help="play one demo cycle instead of looping until Ctrl+C",
+    )
+    parser.add_argument(
+        "--no-reaper",
+        action="store_true",
+        help="only run the MIDI bridge; do not reset REAPER or start transport",
+    )
+    parser.add_argument(
+        "--no-stop-reaper",
+        action="store_true",
+        help="leave REAPER transport alone when h10demoplay exits",
+    )
+    return parser.parse_args(sys.argv[1:])
+
+
+def run_reaper_python(code: str, *, timeout: float = 12.0) -> subprocess.CompletedProcess[str] | None:
+    if not Path(REAPER_PYTHON).exists():
+        print(
+            f"[h10demoplay] REAPER control skipped: {REAPER_PYTHON} not found",
+            file=sys.stderr,
+            flush=True,
+        )
+        return None
+    try:
+        return subprocess.run(
+            [REAPER_PYTHON, "-c", code],
+            cwd=str(ROOT),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        print("[h10demoplay] REAPER control timed out", file=sys.stderr, flush=True)
+        return None
+
+
+def bind_reaper_and_play() -> bool:
+    code = f"""
+import time
+from reapy import reascript_api as RPR
+
+PORT = {PORT!r}
+RPR.Main_OnCommand(41175, 0)
+time.sleep(0.5)
+
+matches = []
+seen = []
+for index in range(128):
+    result = RPR.GetMIDIInputName(index, '', 2048)
+    ok = bool(result[0])
+    name = result[2] if len(result) > 2 else ''
+    if name and PORT.lower() in name.lower():
+        seen.append((index, ok, name))
+    if ok and PORT.lower() in name.lower():
+        matches.append((index, name))
+
+if not matches:
+    print(f"[h10demoplay] enabled {{PORT}} input not found; seen={{seen}}")
+    raise SystemExit(2)
+
+index, name = matches[0]
+track = RPR.GetTrack(0, 0)
+recinput = 4096 + index * 32
+RPR.SetMediaTrackInfo_Value(track, 'I_RECARM', 1)
+RPR.SetMediaTrackInfo_Value(track, 'I_RECMON', 1)
+RPR.SetMediaTrackInfo_Value(track, 'I_RECMODE', 0)
+RPR.SetMediaTrackInfo_Value(track, 'I_RECINPUT', recinput)
+
+# Always restart the short template from the audible range.
+if RPR.GetToggleCommandState(1068) != 1:
+    RPR.Main_OnCommand(1068, 0)
+RPR.GetSet_LoopTimeRange(True, True, 0.0, 64.0, False)
+RPR.Main_OnCommand(1016, 0)
+time.sleep(0.1)
+RPR.SetEditCurPos(0.0, True, False)
+RPR.Main_OnCommand(1007, 0)
+RPR.UpdateArrange()
+print(f"[h10demoplay] REAPER bound H10 CONTROL to {{name}} index={{index}} and transport is playing from 0s")
+"""
+    result = run_reaper_python(code)
+    if result is None:
+        return False
+    if result.stdout:
+        print(result.stdout.rstrip(), file=sys.stderr, flush=True)
+    return result.returncode == 0
+
+
+def stop_reaper_transport() -> None:
+    code = """
+from reapy import reascript_api as RPR
+RPR.Main_OnCommand(1016, 0)
+print("[h10demoplay] REAPER transport stopped")
+"""
+    result = run_reaper_python(code, timeout=6.0)
+    if result and result.stdout:
+        print(result.stdout.rstrip(), file=sys.stderr, flush=True)
+
+
+def terminate_demo(proc: subprocess.Popen[str]) -> None:
+    if proc.poll() is not None:
+        return
+    print("[h10demoplay] stopping demo bridge", file=sys.stderr, flush=True)
+    try:
+        os.killpg(proc.pid, signal.SIGINT)
+    except ProcessLookupError:
+        return
+    except PermissionError:
+        proc.send_signal(signal.SIGINT)
+    try:
+        proc.wait(timeout=4)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        except PermissionError:
+            proc.terminate()
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+
+def main() -> int:
+    args = parse_args()
+
+    if PID_FILE.exists():
+        try:
+            existing_pid = int(PID_FILE.read_text(encoding="utf-8").strip())
+            os.kill(existing_pid, 0)
+        except (OSError, ValueError):
+            PID_FILE.unlink(missing_ok=True)
+        else:
+            print(
+                f"[h10demoplay] already running (pid {existing_pid}); "
+                "run h10demostop first",
+                file=sys.stderr,
+            )
+            return 1
+
+    PID_FILE.write_text(f"{os.getpid()}\n", encoding="utf-8")
+
+    def remove_pid_file() -> None:
+        try:
+            if int(PID_FILE.read_text(encoding="utf-8").strip()) == os.getpid():
+                PID_FILE.unlink(missing_ok=True)
+        except (OSError, ValueError):
+            pass
+
+    atexit.register(remove_pid_file)
+
+    command = [str(ROOT / "midi_bridge/run_continuous_demo.sh"), "--sound"]
+    if not args.once:
+        command.append("--loop")
+
+    env = os.environ.copy()
+    env["H10_PYTHON"] = H10_PYTHON
+    env["CONTINUOUS_DEMO_SPEED"] = SPEED
+
+    print("[h10demoplay] starting H10 demo bridge", file=sys.stderr, flush=True)
+    proc = subprocess.Popen(
+        command,
+        cwd=str(ROOT),
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+        start_new_session=True,
+    )
+
+    reaper_ready_sent = False
+    shutting_down = False
+
+    def request_stop(signum: int, _frame: object) -> None:
+        nonlocal shutting_down
+        shutting_down = True
+        terminate_demo(proc)
+        if not args.no_reaper and not args.no_stop_reaper:
+            stop_reaper_transport()
+
+    signal.signal(signal.SIGINT, request_stop)
+    signal.signal(signal.SIGTERM, request_stop)
+
+    try:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            print(line, end="", flush=True)
+            if (
+                not args.no_reaper
+                and not reaper_ready_sent
+                and "Opened virtual MIDI output" in line
+            ):
+                # CoreMIDI usually needs a beat to expose the new virtual input.
+                time.sleep(0.8)
+                reaper_ready_sent = True
+                if not bind_reaper_and_play():
+                    print(
+                        "[h10demoplay] bridge is running, but REAPER was not auto-bound",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+
+        return_code = proc.wait()
+    finally:
+        if not shutting_down:
+            terminate_demo(proc)
+            if not args.no_reaper and not args.no_stop_reaper:
+                stop_reaper_transport()
+
+    return return_code
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+PY
