@@ -27,6 +27,9 @@ REAPER_PYTHON = os.environ["H10DEMOPLAY_REAPER_PYTHON"]
 SPEED = os.environ["H10DEMOPLAY_SPEED"]
 PID_FILE = Path(os.environ["H10DEMOPLAY_PIDFILE"])
 PORT = "H10 Continuous Body Field"
+CONTROL_TRACK_NAME = "H10 CONTROL"
+REAPER_BIND_RETRY_SECONDS = 4.0
+REAPER_WAIT_HINT_SECONDS = 12.0
 
 
 def parse_args() -> argparse.Namespace:
@@ -75,16 +78,29 @@ def run_reaper_python(code: str, *, timeout: float = 12.0) -> subprocess.Complet
         return None
 
 
+def reaper_is_running() -> bool:
+    try:
+        result = subprocess.run(
+            ["pgrep", "-x", "REAPER"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    except FileNotFoundError:
+        return False
+    return result.returncode == 0
+
+
 def bind_reaper_and_play() -> bool:
     code = f"""
 import time
 from reapy import reascript_api as RPR
 
 PORT = {PORT!r}
-RPR.Main_OnCommand(41175, 0)
-time.sleep(0.5)
+CONTROL_TRACK_NAME = {CONTROL_TRACK_NAME!r}
 
-matches = []
+enabled_matches = []
+disabled_matches = []
 seen = []
 for index in range(128):
     result = RPR.GetMIDIInputName(index, '', 2048)
@@ -92,14 +108,45 @@ for index in range(128):
     name = result[2] if len(result) > 2 else ''
     if name and PORT.lower() in name.lower():
         seen.append((index, ok, name))
-    if ok and PORT.lower() in name.lower():
-        matches.append((index, name))
+        if ok:
+            enabled_matches.append((index, name))
+        else:
+            disabled_matches.append((index, name))
 
-if not matches:
-    print(f"[h10demoplay] enabled {{PORT}} input not found; seen={{seen}}")
+if not enabled_matches:
+    if disabled_matches:
+        print(
+            f"[h10demoplay] {{PORT}} is visible in REAPER but disabled in Preferences > Audio > MIDI Inputs; "
+            f"seen={{seen}}"
+        )
+    else:
+        print(f"[h10demoplay] enabled {{PORT}} input not found; seen={{seen}}")
     raise SystemExit(2)
 
-index, name = matches[0]
+index, name = enabled_matches[0]
+project_info = RPR.EnumProjects(-1, "", 2048)
+project_path = project_info[2] if isinstance(project_info, (list, tuple)) and len(project_info) > 2 else ""
+track_count = RPR.CountTracks(0)
+if track_count < 1:
+    print(
+        f"[h10demoplay] waiting for REAPER project with a top track named {{CONTROL_TRACK_NAME}}; "
+        f"no tracks are loaded (project={{project_path or '[unsaved]'}})"
+    )
+    raise SystemExit(3)
+
+track = RPR.GetTrack(0, 0)
+track_info = RPR.GetTrackName(track, "", 512)
+track_name = track_info[2] if isinstance(track_info, (list, tuple)) and len(track_info) > 2 else ""
+if track_name != CONTROL_TRACK_NAME:
+    print(
+        f"[h10demoplay] waiting for REAPER project with a top track named {{CONTROL_TRACK_NAME}}; "
+        f"current project={{project_path or '[unsaved]'}} top_track={{track_name or '[unnamed]'}}"
+    )
+    raise SystemExit(3)
+
+RPR.Main_OnCommand(41175, 0)
+time.sleep(0.5)
+
 track = RPR.GetTrack(0, 0)
 recinput = 4096 + index * 32
 RPR.SetMediaTrackInfo_Value(track, 'I_RECARM', 1)
@@ -116,7 +163,10 @@ time.sleep(0.1)
 RPR.SetEditCurPos(0.0, True, False)
 RPR.Main_OnCommand(1007, 0)
 RPR.UpdateArrange()
-print(f"[h10demoplay] REAPER bound H10 CONTROL to {{name}} index={{index}} and transport is playing from 0s")
+print(
+    f"[h10demoplay] REAPER bound {{CONTROL_TRACK_NAME}} to {{name}} index={{index}} "
+    f"in project={{project_path or '[unsaved]'}} and transport is playing from 0s"
+)
 """
     result = run_reaper_python(code)
     if result is None:
@@ -211,7 +261,10 @@ def main() -> int:
         start_new_session=True,
     )
 
-    reaper_ready_sent = False
+    reaper_bind_enabled = False
+    reaper_bound = False
+    last_reaper_try = 0.0
+    last_reaper_hint = 0.0
     shutting_down = False
 
     def request_stop(signum: int, _frame: object) -> None:
@@ -226,22 +279,44 @@ def main() -> int:
 
     try:
         assert proc.stdout is not None
+
+        def maybe_bind_reaper(force: bool = False) -> None:
+            nonlocal reaper_bind_enabled, reaper_bound, last_reaper_try, last_reaper_hint
+            if args.no_reaper or reaper_bound:
+                return
+
+            now = time.monotonic()
+            if not force and now - last_reaper_try < REAPER_BIND_RETRY_SECONDS:
+                return
+            last_reaper_try = now
+
+            if not reaper_is_running():
+                if now - last_reaper_hint >= REAPER_WAIT_HINT_SECONDS:
+                    print(
+                        "[h10demoplay] waiting for REAPER to be opened manually; "
+                        "once it is open, select a project whose first track is H10 CONTROL",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    last_reaper_hint = now
+                return
+
+            if bind_reaper_and_play():
+                reaper_bound = True
+                reaper_bind_enabled = False
+
         for line in proc.stdout:
             print(line, end="", flush=True)
             if (
                 not args.no_reaper
-                and not reaper_ready_sent
                 and "Opened virtual MIDI output" in line
             ):
                 # CoreMIDI usually needs a beat to expose the new virtual input.
                 time.sleep(0.8)
-                reaper_ready_sent = True
-                if not bind_reaper_and_play():
-                    print(
-                        "[h10demoplay] bridge is running, but REAPER was not auto-bound",
-                        file=sys.stderr,
-                        flush=True,
-                    )
+                reaper_bind_enabled = True
+                maybe_bind_reaper(force=True)
+            elif reaper_bind_enabled:
+                maybe_bind_reaper()
 
         return_code = proc.wait()
     finally:

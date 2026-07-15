@@ -43,14 +43,19 @@ Demo / audition without the strap — replays recorded capture data and keeps
 the virtual MIDI port alive across loop cycles:
 
 ```bash
-./midi_bridge/run_continuous_demo.sh --sound --loop     # audible, loops until Ctrl+C
-./midi_bridge/run_continuous_demo.sh --dry-run          # prints MIDI as JSON, no audio
+./h10demoplay                                     # audible, waits for REAPER, binds only when H10 CONTROL is open
+./h10demoplay --once                              # audible, one replay cycle
+./midi_bridge/run_continuous_demo.sh --dry-run    # prints MIDI as JSON, no audio
 ```
 
 Ctrl+C always shuts down cleanly: performance gate to 0, note-offs, and
-All-Notes-Off on every used channel.
+All-Notes-Off on every used channel. `h10demoplay` keeps a PID file and
+refuses to start a second copy — if you left it running in the background,
+stop it with `./h10demostop`.
 
-In REAPER, open `reaper_projects/H10 Continuous Body Field.RPP`. If the
+In REAPER, open a project whose first track is `H10 CONTROL` before the
+bridge tries to bind. `h10demoplay` now keeps retrying until it sees that
+track, so you can open REAPER manually whenever you are ready. If the
 bridge was restarted, reset REAPER's MIDI devices (action 41175) so it
 subscribes to the new virtual-port instance. The idempotent setup/repair
 script lives at `reaper/continuous/setup_h10_continuous.lua`.
