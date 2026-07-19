@@ -74,8 +74,8 @@ tapL = bufL[r1] * 0.52 + bufR[r2] * 0.31 + bufL[r3] * 0.17;
 tapR = bufR[r1] * 0.52 + bufL[r2] * 0.31 + bufR[r3] * 0.17;
 
 // short-to-medium retention; stillness lengthens it only gently
-feedback = 0.28 + stillness * 0.16;
-cross = 0.18 + rotation * 0.10;
+feedback = 0.28 + stillness * 0.22;
+cross = 0.18 + rotation * 0.14;
 bufL[write_pos] = highL + (tapL * (1 - cross) + tapR * cross) * feedback;
 bufR[write_pos] = highR + (tapR * (1 - cross) + tapL * cross) * feedback;
 write_pos += 1;

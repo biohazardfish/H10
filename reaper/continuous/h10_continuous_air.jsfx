@@ -1,16 +1,17 @@
 desc:H10 Continuous Air
 tags:H10 continuous air veil (low-level atmospheric support, not a featured layer)
 
-// AIR = breath / distant air movement, at the edge of perception. It is no
+// AIR = breath / distant air movement, still low in the mix. It is no
 // longer a featured layer: no grains, no whistle tone, no bright events,
 // no fast panning. A single dark pink-noise veil whose level follows
-// overall activity slowly, with broad, shallow stereo drift. If individual
-// AIR events are noticeable, AIR is too loud -- there are deliberately no
-// events to notice.
+// overall activity (the only layer that tracks motion 1:1), with broad,
+// shallow stereo drift subtly shaped by fluidity too. If individual AIR
+// events are noticeable, AIR is too loud -- there are deliberately no
+// events to notice, only a level that rises and falls with activity.
 //
 // MiniLab (ch2): CC31 = AIR/SPACE fader. No other macros.
 
-slider1:0.09<0,0.5,0.005>Base level
+slider1:0.16<0,0.5,0.005>Base level
 
 in_pin:none
 out_pin:left
@@ -48,10 +49,11 @@ while (midirecv(offset, msg1, msg23)) (
   midisend(offset, msg1, msg23);
 );
 
-// slow slew targets: attack ~2.5 s, release ~5 s -- nothing ever jumps
+// slew targets: attack ~1.2 s, release ~3 s -- still nothing jumps, but
+// motion (already bridge-smoothed 0.2s/2.5s) registers faster here
 bed_target = min(1, motion * 1.2);
-bed_attack = 1 / (2.5 * srate);
-bed_release = 1 / (5.0 * srate);
+bed_attack = 1 / (1.2 * srate);
+bed_release = 1 / (3.0 * srate);
 
 @sample
 idle_samples += 1;
@@ -68,8 +70,9 @@ veil = pink - low * 0.6;
 dark1 += 0.045 * (veil - dark1);
 dark2 += 0.045 * (dark1 - dark2);
 
-// broad, slow stereo drift; rotation only eases the drift a little wider
-orbit += 2 * $pi * (0.018 + rotation * 0.03) / srate;
+// broad, slow stereo drift; rotation eases it wider, low fluidity (jerky
+// movement) nudges the drift marginally faster -- AIR's own identity axis
+orbit += 2 * $pi * (0.018 + rotation * 0.03 + (1 - fluidity) * 0.01) / srate;
 orbit > 2*$pi ? orbit -= 2*$pi;
 pan = sin(orbit) * (0.12 + rotation * 0.14);
 left_gain = sqrt(max(0, (1 - pan) * 0.5));

@@ -4,11 +4,11 @@ tags:H10 continuous posture harmony (slow breathing warm middle layer)
 // BODY = slow breathing harmony: a warm middle-frequency cushion that
 // opens and closes gradually. No fragmentation, no rhythmic gating, no
 // bright revoicing, no melodic events. Four near-mono detuned sine voices
-// on D/A/E/G material; verticality glides the register over ~12 seconds,
-// stillness lengthens the sustain floor, motion gently thins the layer,
-// RMSSD (regulation) crossfades one subtle interval colour (E vs G), and
-// fluidity only smooths how fast level changes settle. At any moment only
-// one musical property is really moving.
+// on D/A/E/G material; verticality glides the register over ~5 seconds,
+// stillness lengthens the sustain floor, motion thins the layer over
+// ~1.5 seconds (the most directly reactive property here), RMSSD
+// (regulation) crossfades one subtle interval colour (E vs G) over
+// ~3.5 seconds, and fluidity smooths how fast level changes settle.
 //
 // MiniLab (ch2): CC30 = BODY fader. No other macros.
 
@@ -64,17 +64,18 @@ while (midirecv(offset, msg1, msg23)) (
 );
 
 // fluidity smooths the envelope: fluid = slow settling, jerky = a bit faster
-level_slew_coef = 1 / ((1.5 + fluidity * 3.5) * srate);
+level_slew_coef = 1 / ((0.6 + fluidity * 2.0) * srate);
 
 @sample
 idle_samples += 1;
 idle_samples > srate * 3 ? performance_gate = 0;
 gate += (performance_gate - gate) * (performance_gate > gate ? 0.00045 : 0.00007);
 
-// slow glides: register ~12 s, colour ~8 s, thinning ~4 s
-vpos += (uprightness - vpos) / (12 * srate);
-colour += ((1 - regulation) - colour) / (8 * srate);
-thin += (motion - thin) / (4 * srate);
+// glides: register ~5 s, colour ~3.5 s, thinning ~1.5 s (shortened so a
+// short listen actually contains several perceptible movements)
+vpos += (uprightness - vpos) / (5 * srate);
+colour += ((1 - regulation) - colour) / (3.5 * srate);
+thin += (motion - thin) / (1.5 * srate);
 
 // voices: D3->D4 glide, A3 anchor, E3 colour a, G3 colour b
 m0 = 50 + vpos * 12;   // D3 -> D4
@@ -112,8 +113,8 @@ rawR = s0 + s1 * 0.96 + s2 * 1.03 + s3 * 0.98;
 lpL += 0.030 * (rawL - lpL);
 lpR += 0.030 * (rawR - lpR);
 
-// high-pass ~140 Hz keeps BODY off EARTH's floor
-hp_k = 140 / srate * 2 * $pi;
+// high-pass ~170 Hz keeps BODY off EARTH's floor
+hp_k = 170 / srate * 2 * $pi;
 hpL += hp_k * (lpL - hpL);
 hpR += hp_k * (lpR - hpR);
 
@@ -122,8 +123,8 @@ hpR += hp_k * (lpR - hpR);
 breath += 2 * $pi * 0.06 / srate; breath > 2*$pi ? breath -= 2*$pi;
 swell = 1 - (0.08 + (1 - stillness) * 0.06) * (0.5 + 0.5 * sin(breath));
 level_target = base_level * fader_level * swell
-             * (0.55 + stillness * 0.30)
-             * (1 - thin * 0.22);
+             * (0.40 + stillness * 0.45)
+             * (1 - thin * 0.35);
 level_slew += (level_target - level_slew) * level_slew_coef;
 
 spl0 = (lpL - hpL) * level_slew * gate;

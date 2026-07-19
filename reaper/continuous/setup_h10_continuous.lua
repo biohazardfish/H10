@@ -174,13 +174,18 @@ local function ensure_melody_voice(control, space, mini_index, mini_name)
     melody = reaper.GetTrack(0, 7)
     set_name(melody, "MELODY VOICE")
   else
-    melody = add_track("MELODY VOICE", {181, 131, 77}, midi_input(mini_index, 1), 0.9, true)
+    melody = add_track("MELODY VOICE", {181, 131, 77}, midi_input(mini_index, 0), 0.9, true)
   end
   set_color(melody, 181, 131, 77)
   reaper.SetMediaTrackInfo_Value(melody, "D_VOL", 0.9)
   reaper.SetMediaTrackInfo_Value(melody, "B_MAINSEND", 1)
   add_fx(melody, MELODY_FX)
-  rebind_input(melody, mini_index, mini_name, 1, "MELODY VOICE")
+  -- All channels, not a specific one: the MiniLab's own onboard channel
+  -- assignment varies by which memory preset is active on the hardware
+  -- (observed switching between MIDI channel 1, 2 and 10 across presets),
+  -- and the JSFX itself now discriminates keyboard notes from the H10
+  -- heartbeat by pitch (note 36 is always excluded), not by channel.
+  rebind_input(melody, mini_index, mini_name, 0, "MELODY VOICE")
   ensure_midi_send(control, melody)
   set_space_send_volume(melody, space, 0.06)
   return melody

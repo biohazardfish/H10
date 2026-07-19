@@ -15,12 +15,17 @@ tags:H10 continuous melody instrument (soft electric-piano / felted hybrid, manu
 // 12-TET; the played note sounds as that note.
 //
 // MIDI contract:
-//   ch2 (chan==1)  keyboard notes, pitch bend +/-12 st, CC64 sustain,
-//                  CC1 small bounded brightness assist, and the eight
-//                  Melody knobs + Melody fader:
-//                    CC20 Attack   CC21 Decay    CC22 Sustain  CC23 Release
-//                    CC24 Tone     CC25 Warmth   CC26 Space    CC27 H10 influence
-//                    CC28 MELODY VOICE fader
+//   any channel  keyboard notes (except note 36, reserved for the H10
+//                heartbeat), pitch bend +/-12 st, CC64 sustain, CC1 small
+//                bounded brightness assist, and the eight Melody knobs +
+//                Melody fader:
+//                  CC20 Attack   CC21 Decay    CC22 Sustain  CC23 Release
+//                  CC24 Tone     CC25 Warmth   CC26 Space    CC27 H10 influence
+//                  CC28 MELODY VOICE fader
+//                Channel-agnostic on purpose: the MiniLab's own onboard
+//                channel assignment varies by which memory preset/local
+//                template is active on the hardware and isn't reliably
+//                controllable from here.
 //   ch1 (chan==0)  H10 tint CCs via the H10 CONTROL send (CC10 arousal,
 //                  CC11 regulation). Tint depth is set by CC27; even at
 //                  maximum it only breathes tone/warmth a little and can
@@ -136,45 +141,53 @@ while (midirecv(offset, msg1, msg23)) (
   data1 = msg23 & $xFF;
   data2 = (msg23 / 256) & $xFF;
 
-  chan == 1 ? (
-    (status == $x90 && data2 > 0) ? (
-      v = find_voice(data1);
-      voice_start(v, data1, data2 / 127);
-    ) :
-    (status == $x80 || (status == $x90 && data2 == 0)) ? (
-      vv = 0;
-      while (vv < NVOICES) (
-        base = vv * VSTRIDE;
-        (base[V_STATE] == 1 && base[V_NOTE] == data1) ? (
-          base[V_STATE] = pedal ? 2 : 3;
-        );
-        vv += 1;
+  // Keyboard input is accepted on ANY incoming channel now -- the MiniLab's
+  // own onboard channel assignment has proven unreliable across its memory
+  // presets (varies by which User slot / local template is active on the
+  // hardware, observed switching between MIDI channel 1, 2 and even 10
+  // depending on preset, with no code-side control over that). Note 36 is
+  // always excluded from being treated as a played key: that pitch is
+  // permanently reserved for the H10 heartbeat, which reaches this track
+  // via the H10 CONTROL send regardless of what channel it happens to
+  // coincide with, so this guard is what keeps the heartbeat from ever
+  // being able to sound as a melody note.
+  (status == $x90 && data2 > 0 && data1 != 36) ? (
+    v = find_voice(data1);
+    voice_start(v, data1, data2 / 127);
+  ) :
+  ((status == $x80 || (status == $x90 && data2 == 0)) && data1 != 36) ? (
+    vv = 0;
+    while (vv < NVOICES) (
+      base = vv * VSTRIDE;
+      (base[V_STATE] == 1 && base[V_NOTE] == data1) ? (
+        base[V_STATE] = pedal ? 2 : 3;
       );
-    ) :
-    (status == $xE0) ? (
-      // 14-bit bend -> +/-12 semitones, unquantised
-      bend_target = (data1 + data2 * 128 - 8192) / 8192 * 12;
-    ) :
-    (status == $xB0) ? (
-      data1 == 1 ? cc1_assist = data2 / 127;
-      data1 == 20 ? k_attack = data2 / 127;
-      data1 == 21 ? k_decay = data2 / 127;
-      data1 == 22 ? k_sustain = data2 / 127;
-      data1 == 23 ? k_release = data2 / 127;
-      data1 == 24 ? k_tone = data2 / 127;
-      data1 == 25 ? k_warmth = data2 / 127;
-      data1 == 26 ? k_space = data2 / 127;
-      data1 == 27 ? k_infl = data2 / 127;
-      data1 == 28 ? fader_level = data2 / 127;
-      data1 == 64 ? (
-        data2 >= 64 ? pedal = 1 : (
-          pedal = 0;
-          vv = 0;
-          while (vv < NVOICES) (
-            base = vv * VSTRIDE;
-            base[V_STATE] == 2 ? base[V_STATE] = 3;
-            vv += 1;
-          );
+      vv += 1;
+    );
+  ) :
+  (status == $xE0) ? (
+    // 14-bit bend -> +/-12 semitones, unquantised
+    bend_target = (data1 + data2 * 128 - 8192) / 8192 * 12;
+  ) :
+  (status == $xB0) ? (
+    data1 == 1 ? cc1_assist = data2 / 127;
+    data1 == 20 ? k_attack = data2 / 127;
+    data1 == 21 ? k_decay = data2 / 127;
+    data1 == 22 ? k_sustain = data2 / 127;
+    data1 == 23 ? k_release = data2 / 127;
+    data1 == 24 ? k_tone = data2 / 127;
+    data1 == 25 ? k_warmth = data2 / 127;
+    data1 == 26 ? k_space = data2 / 127;
+    data1 == 27 ? k_infl = data2 / 127;
+    data1 == 28 ? fader_level = data2 / 127;
+    data1 == 64 ? (
+      data2 >= 64 ? pedal = 1 : (
+        pedal = 0;
+        vv = 0;
+        while (vv < NVOICES) (
+          base = vv * VSTRIDE;
+          base[V_STATE] == 2 ? base[V_STATE] = 3;
+          vv += 1;
         );
       );
     );

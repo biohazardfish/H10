@@ -184,21 +184,37 @@ the five instrument tracks (pads ch3 + macro CCs ch2). Audio sends into
 SPACE: HEART 0.05, EARTH 0.15, BODY 0.40, AIR 0.65, MELODY 0.06.
 
 Sound identities (warm restrained ambient palette — one shared world,
-anchored on EARTH): EARTH = the reference layer and tonal floor (low D2
-drone, mostly mono, slow drifting harmonics, rolled off above ~250 Hz;
-unchanged). HEART = a soft pulse: muted internal thump (64 Hz body +
-quiet 170 Hz pressure bloom, ~7 ms soft attack, dark lowpass, no noise,
-no bright transient; identifiable by timing and envelope, never
-brightness; fixed safe level, no fader). BODY = slow breathing harmony
-(four near-mono detuned voices on D/A/E/G; verticality glides register
-over ~12 s, stillness sustains, motion gently thins, regulation
-crossfades one interval colour, fluidity smooths the envelope; no
-fragmentation, high-passed at 140 Hz). AIR = a barely-there breath veil
-(dark filtered pink noise whose level follows activity with 2.5 s/5 s
-slew; no grains, no whistle, no events, broad slow stereo drift). SPACE
-= glue (dark short-to-medium room, doubly damped highs, high-passed
-input, gentle stillness-lengthened tail; no memory theatrics, no
-destabilisation).
+anchored on EARTH). A first redesign pass (2026-07-15) fixed an earlier
+version that read as too bright/fragmented/game-like; a follow-up pass
+(2026-07-20) then widened dynamic range and shortened internal glide
+times after live testing showed the first pass had over-corrected into
+sounding static and undifferentiated — same restrained/warm character,
+now with meaningfully audible reaction to body signals within a
+30-60s window instead of 1-2 barely-perceptible transitions:
+
+EARTH = the reference layer and tonal floor (low D2 drone, mostly mono,
+spectral drift now on a ~21-45s cycle rather than 45-110s, rolled off
+tighter below ~200 Hz to clear BODY's band; harmonic identity unchanged).
+EARTH now also reads motion (CC12) as a distinct axis from BODY's —
+nudging spectral agitation/drift speed rather than level — and its
+internal recovery smoother was shortened from 20s/3s to 3s/1s attack/
+release since the bridge already smooths arousal upstream; level swing
+widened accordingly. HEART = a soft pulse: muted internal thump (64 Hz
+body + quiet 170 Hz pressure bloom, ~7 ms soft attack, dark lowpass, no
+noise, no bright transient; identifiable by timing and envelope, never
+brightness; arousal's effect on firmness/decay widened from earlier
+±12%/-30ms to ±22%/-45ms; fixed safe level, no fader). BODY = slow
+breathing harmony (four near-mono detuned voices on D/A/E/G; glide times
+shortened -- register ~5s, colour ~3.5s, motion-thinning ~1.5s -- level
+range widened, high-passed at 170 Hz to further clear EARTH's band; no
+fragmentation). AIR = a breath veil, still the quietest layer by far but
+raised from a near-inaudible 0.09 to 0.16 base level and given faster
+motion-tracking (1.2s/3s slew); dark filtered pink noise, no grains, no
+whistle, no events; fluidity now nudges its stereo drift rate as a small
+identity axis distinct from BODY's use of fluidity. SPACE = glue (dark
+short-to-medium room, doubly damped highs, high-passed input; stillness/
+rotation response ranges widened slightly; still deliberately near-static
+-- no memory theatrics, no destabilisation, not a body-driven voice).
 
 ## MELODY VOICE (MiniLab keyboard)
 

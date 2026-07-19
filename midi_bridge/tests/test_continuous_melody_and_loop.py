@@ -152,8 +152,12 @@ def test_melody_jsfx_contract():
     # at least 4-voice polyphony
     nvoices = re.search(r"NVOICES\s*=\s*(\d+)", MELODY_JSFX)
     assert nvoices and int(nvoices.group(1)) >= 4
-    # keyboard channel 2 (chan index 1) and H10 tint channel 1 (chan index 0)
-    assert "chan == 1 ?" in MELODY_JSFX
+    # keyboard notes accepted on any channel (the MiniLab's own channel
+    # varies by which onboard preset is active), note 36 always excluded
+    # since it's reserved for the H10 heartbeat; H10 tint stays scoped to
+    # channel 1 (chan index 0)
+    assert "data1 != 36" in MELODY_JSFX
+    assert "chan == 0 && status == $xB0" in MELODY_JSFX
     # H10 tint stays bounded and never rewrites pitch: the only place note
     # frequency is derived must be note_freq(note) at note-on
     assert MELODY_JSFX.count("note_freq(") == 2  # definition + voice_start
@@ -217,7 +221,8 @@ def test_air_has_no_bright_event_generator():
 def test_setup_script_builds_melody_voice_track():
     assert 'MELODY VOICE' in SETUP_LUA
     assert "h10_continuous_melody_voice" in SETUP_LUA
-    # MiniLab keyboard channel 2 -> midi_input(mini_index, 1)
-    assert re.search(r"midi_input\(mini_index,\s*1\)", SETUP_LUA)
+    # MiniLab keyboard bound to all channels (its own channel varies by
+    # onboard preset) -> midi_input(mini_index, 0)
+    assert re.search(r"rebind_input\(melody, mini_index, mini_name, 0,", SETUP_LUA)
     # melody keeps a deliberately small SPACE send
     assert re.search(r"set_space_send_volume\(melody,\s*space,\s*0\.0\d", SETUP_LUA)
